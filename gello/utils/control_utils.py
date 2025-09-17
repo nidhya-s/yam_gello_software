@@ -138,8 +138,9 @@ def run_control_loop(
     save_interface: Optional[SaveInterface] = None,
     print_timing: bool = True,
     use_colors: bool = False,
+    smoothing_alpha: Optional[float] = None,
 ) -> None:
-    """Run the main control loop.
+    """Run the main control loop with exponential smoothing.
 
     Args:
         env: Robot environment
@@ -147,6 +148,7 @@ def run_control_loop(
         save_interface: Optional save interface for data collection
         print_timing: Whether to print timing information
         use_colors: Whether to use colored terminal output
+        smoothing_alpha: Exponential smoothing factor (0.0=no smoothing, 0.9=very smooth)
     """
     # Check if we can use colors
     colors_available = False
@@ -162,6 +164,9 @@ def run_control_loop(
         start_msg = "\nStart 🚀🚀🚀"
 
     print(start_msg)
+
+    # Initialize smoothing state
+    last_action = None
 
     start_time = time.time()
     obs = env.get_obs()
@@ -179,6 +184,13 @@ def run_control_loop(
                 print(message, end="", flush=True)
 
         action = agent.act(obs)
+        
+        # Apply exponential smoothing if specified
+        if smoothing_alpha is not None and last_action is not None:
+            action = (1.0 - smoothing_alpha) * action + smoothing_alpha * last_action
+        
+        # Update last action for next iteration
+        last_action = action.copy() if action is not None else None
 
         # Handle save interface
         if save_interface is not None:

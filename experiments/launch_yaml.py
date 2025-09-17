@@ -220,8 +220,11 @@ def main():
             expand_user=True,
         )
 
+    # Get smoothing_alpha from config if available
+    smoothing_alpha = cfg.get("smoothing_alpha", None)
+
     # Run main control loop
-    run_control_loop(env, agent, save_interface)
+    run_control_loop(env, agent, save_interface, smoothing_alpha=smoothing_alpha)
 
 
 if __name__ == "__main__":
