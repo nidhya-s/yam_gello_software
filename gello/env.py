@@ -54,7 +54,7 @@ class RobotEnv:
         ), f"input:{len(joints)}, robot:{self._robot.num_dofs()}"
         assert self._robot.num_dofs() == len(joints)
         self._robot.command_joint_state(joints)
-        self._rate.sleep()
+        #self._rate.sleep()
         return self.get_obs()
 
     def get_obs(self) -> Dict[str, Any]:

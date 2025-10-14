@@ -395,7 +395,7 @@ class DynamixelDriver(DynamixelDriverProtocol):
         if self._is_fake:
             self._torque_enabled = enable
             return
-
+        
         torque_value = TORQUE_ENABLE if enable else TORQUE_DISABLE
         with self._lock:
             for dxl_id in self._ids:

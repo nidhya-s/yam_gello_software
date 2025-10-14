@@ -2,6 +2,7 @@ import atexit
 import signal
 import threading
 import time
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -74,6 +75,8 @@ class Args:
     use_save_interface: bool = False
     """Enable saving data with keyboard interface."""
 
+    output_dir: str = "data/"
+    """Path to the data directory."""
 
 def signal_handler(signum, frame):
     """Handle shutdown signals gracefully."""
@@ -114,6 +117,7 @@ def main():
         )
     else:
         agent = instantiate_from_dict(left_cfg["agent"])
+        # agent = None
 
     # Create robot(s)
     left_robot_cfg = left_cfg["robot"]
@@ -211,11 +215,13 @@ def main():
 
     from gello.utils.control_utils import SaveInterface, run_control_loop
 
+    save_dir = args.output_dir + "/joints/" + datetime.now().strftime("%Y%m%d_%H%M%S")
+
     # Initialize save interface if requested
     save_interface = None
     if args.use_save_interface:
         save_interface = SaveInterface(
-            data_dir=Path(args.left_config_path).parents[1] / "data",
+            data_dir=save_dir,
             agent_name=agent.__class__.__name__,
             expand_user=True,
         )

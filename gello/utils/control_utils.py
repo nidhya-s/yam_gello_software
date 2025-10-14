@@ -1,6 +1,6 @@
 """Shared utilities for robot control loops."""
 
-import datetime
+from datetime import datetime
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -83,18 +83,15 @@ class SaveInterface:
         Args:
             data_dir: Base directory for saving data
             agent_name: Name of agent (used for subdirectory)
-            expand_user: Whether to expand ~ in data_dir path
+            expand_user: Whether to expand ~ in data_dir path   
         """
-        from gello.data_utils.keyboard_interface import KBReset
-
-        self.kb_interface = KBReset()
         self.data_dir = Path(data_dir).expanduser() if expand_user else Path(data_dir)
         self.agent_name = agent_name
-        self.save_path: Optional[Path] = None
-
-        print("Save interface enabled. Use keyboard controls:")
-        print("  S: Start recording")
-        print("  Q: Stop recording")
+        self.save_path: Optional[Path] = (
+            self.data_dir / datetime.now().strftime("%Y%m%d_%H%M%S")
+        )
+        # self.save_path.mkdir(parents=True, exist_ok=True)
+        print(f"Automatic save mode enabled. Saving to {self.save_path} every step.")
 
     def update(self, obs: Dict[str, Any], action: np.ndarray) -> Optional[str]:
         """Update save interface and handle saving.
@@ -108,26 +105,11 @@ class SaveInterface:
         """
         from gello.data_utils.format_obs import save_frame
 
-        dt = datetime.datetime.now()
-        state = self.kb_interface.update()
-
-        if state == "start":
-            dt_time = datetime.datetime.now()
-            self.save_path = (
-                self.data_dir / self.agent_name / dt_time.strftime("%m%d_%H%M%S")
-            )
-            self.save_path.mkdir(parents=True, exist_ok=True)
-            print(f"Saving to {self.save_path}")
-        elif state == "save":
-            if self.save_path is not None:
-                save_frame(self.save_path, dt, obs, action)
-        elif state == "normal":
-            self.save_path = None
-        elif state == "quit":
-            print("\nExiting.")
-            return "quit"
-        else:
-            raise ValueError(f"Invalid state {state}")
+        cur_time = time.perf_counter_ns()
+        
+        if self.save_path is not None:
+            save_file = self.save_path.with_suffix('.pkl')
+            save_frame(save_file, cur_time, obs, action)
 
         return None
 
@@ -185,17 +167,45 @@ def run_control_loop(
 
         action = agent.act(obs)
         
+        # start_time = time.perf_counter()
         # Apply exponential smoothing if specified
         if smoothing_alpha is not None and last_action is not None:
             action = (1.0 - smoothing_alpha) * action + smoothing_alpha * last_action
-        
+        # print("EMA time: ", time.perf_counter() - start_time)
         # Update last action for next iteration
         last_action = action.copy() if action is not None else None
 
-        # Handle save interface
+        # # Handle save interface
         if save_interface is not None:
             result = save_interface.update(obs, action)
             if result == "quit":
                 break
+        # # Instead of using the agent, oscillate the first joint with a sine wave
+        # t = time.time() - start_time
+        
+        # # Try oscillating the first six DOF joints (not just the gripper), with an offset
+        # amplitude = 0.4  # radians (smaller for smoother movement)
+        # frequency = 0.55  # Hz (slower oscillation)
+        # offset = 0.4  # radians (add an offset term)
+        # action = np.zeros(7)
+        # # Oscillate each DOF joint (excluding gripper) with a phase offset for visible movement and an offset
+        # for i in range(1, 3):
+        #     phase = i * np.pi / 3  # spread out starting phases
+        #     action[i] = offset + amplitude * np.sin(2 * np.pi * frequency * t + phase)
+        # # Set gripper command to open (or use current obs to keep it still)
+        # action[6] = obs[-1] if obs is not None and len(obs) > 6 else 1
 
+        # # INSERT_YOUR_CODE
+        # # Calculate and print FPS (frames per second)
+        # frame_time = time.time()
+        # if not hasattr(run_control_loop, "_last_fps_time"):
+        #     run_control_loop._last_fps_time = frame_time
+        #     run_control_loop._frame_count = 0
+        # run_control_loop._frame_count += 1
+        # if frame_time - run_control_loop._last_fps_time >= 1.0:
+        #     fps = run_control_loop._frame_count / (frame_time - run_control_loop._last_fps_time)
+        #     print(f"\nFPS: {fps:.2f}")
+        #     run_control_loop._last_fps_time = frame_time
+        #     run_control_loop._frame_count = 0
+        
         obs = env.step(action)
