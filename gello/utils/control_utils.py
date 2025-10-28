@@ -120,7 +120,6 @@ def run_control_loop(
     save_interface: Optional[SaveInterface] = None,
     print_timing: bool = True,
     use_colors: bool = False,
-    smoothing_alpha: Optional[float] = None,
 ) -> None:
     """Run the main control loop with exponential smoothing.
 
@@ -147,9 +146,6 @@ def run_control_loop(
 
     print(start_msg)
 
-    # Initialize smoothing state
-    last_action = None
-
     start_time = time.time()
     obs = env.get_obs()
 
@@ -167,45 +163,12 @@ def run_control_loop(
 
         action = agent.act(obs)
         
-        # start_time = time.perf_counter()
-        # Apply exponential smoothing if specified
-        if smoothing_alpha is not None and last_action is not None:
-            action = (1.0 - smoothing_alpha) * action + smoothing_alpha * last_action
-        # print("EMA time: ", time.perf_counter() - start_time)
-        # Update last action for next iteration
-        last_action = action.copy() if action is not None else None
 
         # # Handle save interface
         if save_interface is not None:
+            
             result = save_interface.update(obs, action)
             if result == "quit":
                 break
-        # # Instead of using the agent, oscillate the first joint with a sine wave
-        # t = time.time() - start_time
-        
-        # # Try oscillating the first six DOF joints (not just the gripper), with an offset
-        # amplitude = 0.4  # radians (smaller for smoother movement)
-        # frequency = 0.55  # Hz (slower oscillation)
-        # offset = 0.4  # radians (add an offset term)
-        # action = np.zeros(7)
-        # # Oscillate each DOF joint (excluding gripper) with a phase offset for visible movement and an offset
-        # for i in range(1, 3):
-        #     phase = i * np.pi / 3  # spread out starting phases
-        #     action[i] = offset + amplitude * np.sin(2 * np.pi * frequency * t + phase)
-        # # Set gripper command to open (or use current obs to keep it still)
-        # action[6] = obs[-1] if obs is not None and len(obs) > 6 else 1
-
-        # # INSERT_YOUR_CODE
-        # # Calculate and print FPS (frames per second)
-        # frame_time = time.time()
-        # if not hasattr(run_control_loop, "_last_fps_time"):
-        #     run_control_loop._last_fps_time = frame_time
-        #     run_control_loop._frame_count = 0
-        # run_control_loop._frame_count += 1
-        # if frame_time - run_control_loop._last_fps_time >= 1.0:
-        #     fps = run_control_loop._frame_count / (frame_time - run_control_loop._last_fps_time)
-        #     print(f"\nFPS: {fps:.2f}")
-        #     run_control_loop._last_fps_time = frame_time
-        #     run_control_loop._frame_count = 0
         
         obs = env.step(action)
