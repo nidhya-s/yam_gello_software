@@ -215,7 +215,8 @@ def main():
 
     from gello.utils.control_utils import SaveInterface, run_control_loop
 
-    save_dir = args.output_dir + "/joints/" + datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Use output_dir directly - caller handles directory structure
+    save_dir = args.output_dir
 
     # Initialize save interface if requested
     save_interface = None

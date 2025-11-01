@@ -83,13 +83,12 @@ class SaveInterface:
         Args:
             data_dir: Base directory for saving data
             agent_name: Name of agent (used for subdirectory)
-            expand_user: Whether to expand ~ in data_dir path   
+            expand_user: Whether to expand ~ in data_dir path
         """
         self.data_dir = Path(data_dir).expanduser() if expand_user else Path(data_dir)
         self.agent_name = agent_name
-        self.save_path: Optional[Path] = (
-            self.data_dir / datetime.now().strftime("%Y%m%d_%H%M%S")
-        )
+        # Use data_dir directly without creating timestamp subdirectory
+        self.save_path: Optional[Path] = self.data_dir
         # self.save_path.mkdir(parents=True, exist_ok=True)
         print(f"Automatic save mode enabled. Saving to {self.save_path} every step.")
 
@@ -106,9 +105,10 @@ class SaveInterface:
         from gello.data_utils.format_obs import save_frame
 
         cur_time = time.perf_counter_ns()
-        
+
         if self.save_path is not None:
-            save_file = self.save_path.with_suffix('.pkl')
+            # Pass a dummy file path - save_frame will use parent directory and create timestamped files
+            save_file = self.save_path / "data.pkl"
             save_frame(save_file, cur_time, obs, action)
 
         return None
