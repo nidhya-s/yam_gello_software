@@ -13,6 +13,9 @@ from omegaconf import OmegaConf
 
 from gello.utils.launch_utils import instantiate_from_dict
 
+import numpy as np
+from gello.robots.yam import YAMRobot
+
 # Global variables for cleanup
 active_threads = []
 active_servers = []
@@ -64,6 +67,48 @@ def wait_for_server_ready(port, host="127.0.0.1", timeout_seconds=5):
     return False
 
 
+def get_follower_joint_positions(robot):
+    """Get follower joint positions from YAM robot.
+    
+    Args:
+        robot: Robot object (could be YAMRobot or wrapped in BimanualRobot)
+        
+    Returns:
+        tuple: (joint_positions, timestamp) where joint_positions is np.ndarray or None, 
+               timestamp is int (nanoseconds from perf_counter), or None if not available
+    """
+    import time
+    timestamp = time.perf_counter()
+    
+    if hasattr(robot, '_robot_l') and hasattr(robot, '_robot_r'):
+        left_robot = robot._robot_l
+        right_robot = robot._robot_r
+        
+        left_joints = None
+        right_joints = None
+        
+        if isinstance(left_robot, YAMRobot):
+            i2rt_robot_l = left_robot.robot
+            left_joints = np.array(i2rt_robot_l.get_joint_pos())
+        
+        if isinstance(right_robot, YAMRobot):
+            i2rt_robot_r = right_robot.robot
+            right_joints = np.array(i2rt_robot_r.get_joint_pos())
+        
+        if left_joints is not None and right_joints is not None:
+            joints = np.concatenate((left_joints, right_joints))
+            return joints, timestamp
+        elif left_joints is not None:
+            return left_joints, timestamp
+        elif right_joints is not None:
+            return right_joints, timestamp
+        else:
+            return None, timestamp
+    
+    # No robot or not bimanual - return None with timestamp
+    return None, timestamp
+
+
 @dataclass
 class Args:
     left_config_path: str
@@ -80,10 +125,9 @@ class Args:
 
 def signal_handler(signum, frame):
     """Handle shutdown signals gracefully."""
-    cleanup()
-    import os
-
-    os._exit(0)
+    # Don't call cleanup here - let it run in the finally block
+    # Raise KeyboardInterrupt to exit the control loop gracefully
+    raise KeyboardInterrupt("Received shutdown signal")
 
 
 def main():
@@ -148,7 +192,7 @@ def main():
 
     # Handle different robot types
     if hasattr(robot, "serve"):  # MujocoRobotServer or ZMQServerRobot
-        print("Starting robot server...")
+        # print("Starting robot server...")
         from gello.env import RobotEnv
         from gello.zmq_core.robot_node import ZMQClientRobot
 
@@ -165,9 +209,9 @@ def main():
         active_servers.append(robot)
 
         # Wait for server to be ready
-        print(f"Waiting for server to start on {server_host}:{server_port}...")
+        # print(f"Waiting for server to start on {server_host}:{server_port}...")
         wait_for_server_ready(server_port, server_host)
-        print("Server ready!")
+        # print("Server ready!")
 
         # Create client to communicate with server using port and host from config
         robot_client = ZMQClientRobot(port=server_port, host=server_host)
@@ -193,7 +237,7 @@ def main():
             f"Waiting for hardware server to start on {hardware_host}:{hardware_port}..."
         )
         wait_for_server_ready(hardware_port, hardware_host)
-        print("Hardware server ready!")
+        # print("Hardware server ready!")
 
         # Create client to communicate with hardware
         robot_client = ZMQClientRobot(port=hardware_port, host=hardware_host)
@@ -215,7 +259,8 @@ def main():
 
     from gello.utils.control_utils import SaveInterface, run_control_loop
 
-    save_dir = args.output_dir + "/joints/" + datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Use output_dir directly - caller handles directory structure
+    save_dir = args.output_dir
 
     # Initialize save interface if requested
     save_interface = None
@@ -226,9 +271,24 @@ def main():
             expand_user=True,
         )
 
-
     # Run main control loop
-    run_control_loop(env, agent, save_interface)
+    try:
+        run_control_loop(
+            env, 
+            agent, 
+            save_interface, 
+            get_follower_joints_fn=lambda: get_follower_joint_positions(robot)
+        )
+    except KeyboardInterrupt:
+        print("\nControl loop interrupted by user")
+    except Exception as e:
+        print(f"\nError in control loop: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        # Ensure cleanup runs even on normal exit or exceptions
+        cleanup()
+        print("Exiting...")
 
 
 if __name__ == "__main__":

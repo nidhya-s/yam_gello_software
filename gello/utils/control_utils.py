@@ -3,7 +3,7 @@
 from datetime import datetime
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 import numpy as np
 
@@ -83,22 +83,22 @@ class SaveInterface:
         Args:
             data_dir: Base directory for saving data
             agent_name: Name of agent (used for subdirectory)
-            expand_user: Whether to expand ~ in data_dir path   
+            expand_user: Whether to expand ~ in data_dir path
         """
         self.data_dir = Path(data_dir).expanduser() if expand_user else Path(data_dir)
         self.agent_name = agent_name
-        self.save_path: Optional[Path] = (
-            self.data_dir / datetime.now().strftime("%Y%m%d_%H%M%S")
-        )
+        # Use data_dir directly without creating timestamp subdirectory
+        self.save_path: Optional[Path] = self.data_dir
         # self.save_path.mkdir(parents=True, exist_ok=True)
         print(f"Automatic save mode enabled. Saving to {self.save_path} every step.")
 
-    def update(self, obs: Dict[str, Any], action: np.ndarray) -> Optional[str]:
+    def update(self, obs: Dict[str, Any], action: np.ndarray, control_data_timestamp: Optional[int] = None) -> Optional[str]:
         """Update save interface and handle saving.
 
         Args:
             obs: Current observations
             action: Current action
+            control_data_timestamp: Timestamp (nanoseconds) when control data was gathered
 
         Returns:
             Optional[str]: "quit" if user wants to exit, None otherwise
@@ -106,9 +106,13 @@ class SaveInterface:
         from gello.data_utils.format_obs import save_frame
 
         cur_time = time.perf_counter_ns()
-        
+
         if self.save_path is not None:
-            save_file = self.save_path.with_suffix('.pkl')
+            # Pass a dummy file path - save_frame will use parent directory and create timestamped files
+            save_file = self.save_path / "data.pkl"
+            # Store control_data_timestamp in obs if provided
+            if control_data_timestamp is not None:
+                obs["control_data_timestamp"] = control_data_timestamp
             save_frame(save_file, cur_time, obs, action)
 
         return None
@@ -120,6 +124,7 @@ def run_control_loop(
     save_interface: Optional[SaveInterface] = None,
     print_timing: bool = True,
     use_colors: bool = False,
+    get_follower_joints_fn: Optional[Callable[[], Optional[np.ndarray]]] = None,
 ) -> None:
     """Run the main control loop with exponential smoothing.
 
@@ -129,6 +134,7 @@ def run_control_loop(
         save_interface: Optional save interface for data collection
         print_timing: Whether to print timing information
         use_colors: Whether to use colored terminal output
+        get_follower_joints_fn: Optional function to get follower joint positions
         smoothing_alpha: Exponential smoothing factor (0.0=no smoothing, 0.9=very smooth)
     """
     # Check if we can use colors
@@ -161,13 +167,22 @@ def run_control_loop(
             else:
                 print(message, end="", flush=True)
 
+        # Track timestamp when control action is being retrieved
+        control_data_timestamp = time.perf_counter()
         action = agent.act(obs)
         
+        # Get follower joint positions and add to observation for saving
+        if get_follower_joints_fn is not None:
+            result = get_follower_joints_fn()
+            if result is not None:
+                follower_joints, follower_timestamp = result
+                if follower_joints is not None:
+                    obs["follower_joint_positions"] = follower_joints
+                    obs["follower_joint_timestamp"] = follower_timestamp
 
-        # # Handle save interface
+        # Handle save interface
         if save_interface is not None:
-            
-            result = save_interface.update(obs, action)
+            result = save_interface.update(obs, action, control_data_timestamp)
             if result == "quit":
                 break
         

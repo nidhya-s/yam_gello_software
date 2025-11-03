@@ -13,12 +13,23 @@ def save_frame(
     action: np.ndarray,
 ) -> None:
     obs_copy = dict(obs)
-    # Only keep specific keys: joint_positions, joint_velocities, gripper_position, and add control
+    # Only keep: joint_positions, control, control_timestamp, follower_joints, follower_timestamp
     filtered_obs = {}
-    for key in ["joint_positions", "joint_velocities", "gripper_position"]:
-        if key in obs_copy:
-            filtered_obs[key] = obs_copy[key]
+    
+    # Keep joint_positions just in case
+    if "joint_positions" in obs_copy:
+        filtered_obs["joint_positions"] = obs_copy["joint_positions"]
+    
+    # Store control and control timestamp
     filtered_obs["control"] = action
+    if "control_data_timestamp" in obs_copy:
+        filtered_obs["control_timestamp"] = obs_copy["control_data_timestamp"]
+    
+    # Store follower joints and follower timestamp
+    if "follower_joint_positions" in obs_copy:
+        filtered_obs["follower_joints"] = obs_copy["follower_joint_positions"]
+    if "follower_joint_timestamp" in obs_copy:
+        filtered_obs["follower_timestamp"] = obs_copy["follower_joint_timestamp"]
     # make folder if it doesn't exist
     folder = file.parent
     folder.mkdir(exist_ok=True, parents=True)

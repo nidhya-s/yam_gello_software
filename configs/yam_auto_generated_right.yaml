@@ -11,5 +11,5 @@ agent:
     joint_signs: [1.0, -1.0, -1.0, -1.0, 1.0, 1.0]
     gripper_config: [7, 144.4, 200.21484375]
   start_joints: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
-hz: 30
+hz: 60
 max_steps: 1000
