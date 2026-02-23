@@ -178,6 +178,7 @@ def run_control_loop(
                 follower_joints, follower_timestamp = result
                 if follower_joints is not None:
                     obs["follower_joint_positions"] = follower_joints
+                    # print(f"Follower joints: {follower_joints}")
                     obs["follower_joint_timestamp"] = follower_timestamp
 
         # Handle save interface

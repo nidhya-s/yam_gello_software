@@ -4,7 +4,7 @@
 # large files
 *.png
 *.gif
-
+build
 # mac
 *.DS_Store
 

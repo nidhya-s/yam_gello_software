@@ -26,20 +26,38 @@ def cleanup():
     """Clean up resources before exit."""
     global cleanup_in_progress
     if cleanup_in_progress:
+        print("Cleanup already in progress, skipping...")
         return
     cleanup_in_progress = True
 
     print("Cleaning up resources...")
-    for server in active_servers:
-        try:
-            if hasattr(server, "close"):
-                server.close()
-        except Exception as e:
-            print(f"Error closing server: {e}")
 
-    for thread in active_threads:
+    # First, stop all servers to signal threads to exit
+    print(f"Stopping {len(active_servers)} servers...")
+    for i, server in enumerate(active_servers):
+        try:
+            print(f"  Stopping server {i}: {type(server).__name__}")
+            if hasattr(server, "stop"):
+                print(f"    Calling stop()...")
+                server.stop()
+                print(f"    stop() completed")
+            elif hasattr(server, "close"):
+                print(f"    Calling close()...")
+                server.close()
+                print(f"    close() completed")
+        except Exception as e:
+            print(f"Error stopping server {i}: {e}")
+
+    # Then wait for threads to finish
+    print(f"Joining {len(active_threads)} threads...")
+    for i, thread in enumerate(active_threads):
         if thread.is_alive():
+            print(f"  Joining thread {i}...")
             thread.join(timeout=2)
+            if thread.is_alive():
+                print(f"  Thread {i} still alive after timeout!")
+            else:
+                print(f"  Thread {i} joined successfully")
 
     print("Cleanup completed.")
 
@@ -131,10 +149,7 @@ def signal_handler(signum, frame):
 
 
 def main():
-    # Register cleanup handlers
-    # If terminated without cleanup, can leave ZMQ sockets bound causing "address in use" errors or resource leaks
-
-    atexit.register(cleanup)
+    # Register signal handlers for graceful shutdown
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
@@ -200,8 +215,8 @@ def main():
         server_port = cfg["robot"].get("port", 5556)
         server_host = cfg["robot"].get("host", "127.0.0.1")
 
-        # Start server in background (non-daemon for proper cleanup)
-        server_thread = threading.Thread(target=robot.serve, daemon=False)
+        # Start server in background
+        server_thread = threading.Thread(target=robot.serve, daemon=True)
         server_thread.start()
 
         # Track for cleanup
@@ -215,6 +230,7 @@ def main():
 
         # Create client to communicate with server using port and host from config
         robot_client = ZMQClientRobot(port=server_port, host=server_host)
+        active_servers.append(robot_client)  # Track client for cleanup
     else:  # Direct robot (hardware)
         from gello.env import RobotEnv
         from gello.zmq_core.robot_node import ZMQClientRobot, ZMQServerRobot
@@ -225,7 +241,7 @@ def main():
 
         # Create ZMQ server for the hardware robot
         server = ZMQServerRobot(robot, port=hardware_port, host=hardware_host)
-        server_thread = threading.Thread(target=server.serve, daemon=False)
+        server_thread = threading.Thread(target=server.serve, daemon=True)
         server_thread.start()
 
         # Track for cleanup
@@ -241,6 +257,7 @@ def main():
 
         # Create client to communicate with hardware
         robot_client = ZMQClientRobot(port=hardware_port, host=hardware_host)
+        active_servers.append(robot_client)  # Track client for cleanup
 
     env = RobotEnv(robot_client, control_rate_hz=cfg.get("hz", 30))
 
@@ -288,6 +305,28 @@ def main():
     finally:
         # Ensure cleanup runs even on normal exit or exceptions
         cleanup()
+
+        # Also close the underlying robot(s) to stop their internal threads
+        print("Closing robot(s)...")
+        try:
+            if hasattr(robot, '_robot_l') and hasattr(robot, '_robot_r'):
+                # Bimanual robot - close both
+                if hasattr(robot._robot_l, 'robot') and hasattr(robot._robot_l.robot, 'close'):
+                    print("  Closing left robot...")
+                    robot._robot_l.robot.close()
+                if hasattr(robot._robot_r, 'robot') and hasattr(robot._robot_r.robot, 'close'):
+                    print("  Closing right robot...")
+                    robot._robot_r.robot.close()
+            elif hasattr(robot, 'robot') and hasattr(robot.robot, 'close'):
+                # Single robot
+                robot.robot.close()
+
+            # Give threads time to finish
+            print("  Waiting for robot threads to finish...")
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"Error closing robot: {e}")
+
         print("Exiting...")
 
 
