@@ -1,5 +1,5 @@
 from abc import abstractmethod
-from typing import Any, Dict, Protocol, Union
+from typing import Dict, Protocol
 
 import numpy as np
 
@@ -98,23 +98,9 @@ class BimanualRobot(Robot):
             (self._robot_l.get_joint_state(), self._robot_r.get_joint_state())
         )
 
-    def command_joint_state(
-        self, joint_state: Union[np.ndarray, Dict[str, Any]]
-    ) -> None:
-        n_l = self._robot_l.num_dofs()
-        if isinstance(joint_state, dict):
-            pos = joint_state["pos"]
-            left_action: Dict[str, Any] = {"pos": pos[:n_l]}
-            right_action: Dict[str, Any] = {"pos": pos[n_l:]}
-            if "vel" in joint_state and joint_state["vel"] is not None:
-                vel = joint_state["vel"]
-                left_action["vel"] = vel[:n_l]
-                right_action["vel"] = vel[n_l:]
-            self._robot_l.command_joint_state(left_action)
-            self._robot_r.command_joint_state(right_action)
-        else:
-            self._robot_l.command_joint_state(joint_state[:n_l])
-            self._robot_r.command_joint_state(joint_state[n_l:])
+    def command_joint_state(self, joint_state: np.ndarray) -> None:
+        self._robot_l.command_joint_state(joint_state[: self._robot_l.num_dofs()])
+        self._robot_r.command_joint_state(joint_state[self._robot_l.num_dofs() :])
 
     def get_observations(self) -> Dict[str, np.ndarray]:
         l_obs = self._robot_l.get_observations()

@@ -43,50 +43,44 @@ def combine_joints(input_dir, output_file=None):
         timestamps = []
         joint_positions = []
         control = []
-        control_vel = []
         control_timestamp = []
         follower_joints = []
         follower_timestamp = []
-
+        
         for file_path in files:
             # Extract timestamp from filename
             timestamp = int(os.path.basename(file_path).split('.')[0])
-
+            
             try:
                 with open(file_path, 'rb') as f:
                     data = pickle.load(f)
-
+                
                 timestamps.append(timestamp)
-
+                
                 # Required fields
                 if 'joint_positions' in data:
                     joint_positions.append(data['joint_positions'])
                 else:
                     joint_positions.append(None)
-
+                
                 control.append(data['control'])
-
+                
                 # Optional fields
-                if 'control_vel' in data:
-                    control_vel.append(data['control_vel'])
-                else:
-                    control_vel.append(None)
-
                 if 'control_timestamp' in data:
                     control_timestamp.append(data['control_timestamp'])
                 else:
                     control_timestamp.append(None)
-
+                
                 if 'follower_joints' in data:
                     follower_joints.append(data['follower_joints'])
                 else:
                     follower_joints.append(None)
-
+                
                 if 'follower_timestamp' in data:
                     follower_timestamp.append(data['follower_timestamp'])
                 else:
                     follower_timestamp.append(None)
-
+                
             except Exception as e:
                 print(f"Error reading {file_path}: {e}")
         
@@ -103,13 +97,6 @@ def combine_joints(input_dir, output_file=None):
             # Handle mixed None/not-None case - store as object array
             combined_data['joint_positions'] = np.array(joint_positions, dtype=object)
         
-        # Add control_vel if any exist (feedforward velocity targets)
-        if any(cv is not None for cv in control_vel):
-            if all(cv is not None for cv in control_vel):
-                combined_data['control_vel'] = np.array(control_vel)
-            else:
-                combined_data['control_vel'] = np.array(control_vel, dtype=object)
-
         # Add control_timestamp if any exist
         if any(ct is not None for ct in control_timestamp):
             combined_data['control_timestamp'] = np.array(control_timestamp, dtype=object)
@@ -121,7 +108,7 @@ def combine_joints(input_dir, output_file=None):
         # Add follower_timestamp if any exist
         if any(ft is not None for ft in follower_timestamp):
             combined_data['follower_timestamp'] = np.array(follower_timestamp, dtype=object)
-
+        
         # Save combined data
         with open(output_file, 'wb') as f:
             pickle.dump(combined_data, f)

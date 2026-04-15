@@ -31,9 +31,6 @@ class Args:
     port: Optional[str] = None
     """The port that GELLO is connected to. If not provided, will auto-detect."""
 
-    baudrate: int = 1_000_000
-    """The Dynamixel baudrate to use when reading offsets and writing the generated config."""
-
     start_joints: Tuple[float, ...] = (0, 0, 0, 0, 0, 0)
     """The joint angles that the GELLO should be placed in (in radians). Default is YAM known position."""
 
@@ -92,7 +89,7 @@ def get_joint_offsets(
 ) -> Tuple[list, Optional[Tuple[float, float]]]:
     """Get joint offsets using the same logic as gello_get_offset.py."""
     joint_ids = list(range(1, args.num_joints + 1))
-    driver = DynamixelDriver(joint_ids, port=port, baudrate=args.baudrate)
+    driver = DynamixelDriver(joint_ids, port=port, baudrate=57600)
 
     def get_error(offset: float, index: int, joint_state: np.ndarray) -> float:
         joint_sign_i = args.joint_signs[index]
@@ -138,7 +135,6 @@ def flow_style_representer(dumper, data):
 def update_config_with_offsets(
     template_config: dict,
     port: str,
-    baudrate: int,
     joint_offsets: list,
     gripper_config: Optional[Tuple[float, float]],
 ) -> dict:
@@ -167,11 +163,6 @@ def update_config_with_offsets(
 
     # Update basic config
     config["agent"]["port"] = port
-    config["agent"]["baudrate"] = int(baudrate)
-    if config.get("robot", {}).get("_target_") == "gello.robots.yam.YAMRobot":
-        config["agent"]["return_velocity"] = True
-        config["robot"]["velocity_feedforward_eta"] = 0.9
-        config["robot"]["velocity_feedforward_max_vel"] = 6.0
 
     # Update offsets and convert to flow style
     dynamixel_config["joint_offsets"] = to_flow_list(
@@ -262,15 +253,11 @@ def main(args: Args) -> None:
 
         # Update configs with detected offsets
         hardware_config = update_config_with_offsets(
-            hardware_template, port, args.baudrate, joint_offsets, gripper_config
+            hardware_template, port, joint_offsets, gripper_config
         )
         sim_config = update_config_with_offsets(
-            sim_template, port, args.baudrate, joint_offsets, gripper_config
+            sim_template, port, joint_offsets, gripper_config
         )
-
-        # Propagate CAN channel into hardware config (sim robot has no channel)
-        if "channel" in hardware_config.get("robot", {}):
-            hardware_config["robot"]["channel"] = args.channel
 
     except FileNotFoundError as e:
         print(f"Error: Template config file not found: {e}")

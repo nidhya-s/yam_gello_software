@@ -6,14 +6,12 @@ robot:
   port: 6001
 agent:
   _target_: gello.agents.gello_agent.GelloAgent
-  baudrate: 1000000
   port: /dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTAKRMFX-if00-port0
   dynamixel_config:
     _target_: gello.agents.gello_agent.DynamixelRobotConfig
-    joint_ids: [1, 2, 3, 4, 5, 6]
-    joint_offsets: [4.71239, 3.14159, 4.71239, 1.5708, 3.14159, 4.71239]
+    joint_ids: [8, 9, 10, 11, 12, 13]
+    joint_offsets: [10.99557, 3.14159, 4.71239, 1.5708, 3.14159, 4.71239]
     joint_signs: [1.0, -1.0, -1.0, -1.0, 1.0, 1.0]
-    gripper_config: [7, 234.58203125, 294.08203125]
-    gripper_zero_deadband: 0.08
+    gripper_config: [14, 232.384765625, 291.884765625]
   start_joints: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
 hz: 60

@@ -6,8 +6,6 @@ from typing import Any, Dict, Optional
 import numpy as np
 from omegaconf import OmegaConf
 
-from gello.agents.agent import action_pos
-
 
 class SimpleLaunchManager:
     """Simplified launch manager for robot systems."""
@@ -109,7 +107,7 @@ class SimpleLaunchManager:
 
     def validate_agent_output(self):
         """Validate that agent output matches environment dimensions."""
-        start_pos = action_pos(self.agent.act(self.env.get_obs()))
+        start_pos = self.agent.act(self.env.get_obs())
         obs = self.env.get_obs()
         joints = obs["joint_positions"]
 
@@ -157,7 +155,7 @@ class SimpleLaunchManager:
         max_delta = 1.0
         for _ in range(25):
             obs = self.env.get_obs()
-            command_joints = action_pos(self.agent.act(obs))
+            command_joints = self.agent.act(obs)
             current_joints = obs["joint_positions"]
             delta = command_joints - current_joints
             max_joint_delta = np.abs(delta).max()

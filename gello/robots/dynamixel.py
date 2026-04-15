@@ -17,7 +17,6 @@ class DynamixelRobot(Robot):
         port: str = "/dev/ttyUSB0",
         baudrate: int = 57600,
         gripper_config: Optional[Tuple[int, float, float]] = None,
-        gripper_zero_deadband: float = 0.0,
         start_joints: Optional[np.ndarray] = None,
     ):
         from gello.dynamixel.driver import (
@@ -46,7 +45,6 @@ class DynamixelRobot(Robot):
             self.gripper_open_close = None
 
         self._joint_ids = joint_ids
-        self._gripper_zero_deadband = float(gripper_zero_deadband)
         self._driver: DynamixelDriverProtocol
 
         if joint_offsets is None:
@@ -70,10 +68,6 @@ class DynamixelRobot(Robot):
         assert np.all(
             np.abs(self._joint_signs) == 1
         ), f"joint_signs: {self._joint_signs}"
-        assert 0.0 <= self._gripper_zero_deadband < 1.0, (
-            f"gripper_zero_deadband must be in [0, 1), got "
-            f"{self._gripper_zero_deadband}"
-        )
 
         if real:
             self._driver = DynamixelDriver(joint_ids, port=port, baudrate=baudrate)
@@ -81,6 +75,8 @@ class DynamixelRobot(Robot):
         else:
             self._driver = FakeDynamixelDriver(joint_ids)
         self._torque_on = False
+        self._last_pos = None
+        self._alpha = 0.99
 
         if start_joints is not None:
             # loop through all joints and add +- 2pi to the joint offsets to get the closest to start joints
@@ -107,8 +103,8 @@ class DynamixelRobot(Robot):
     def num_dofs(self) -> int:
         return len(self._joint_ids)
 
-    def _map_driver_positions(self, raw_pos: np.ndarray) -> np.ndarray:
-        pos = (raw_pos - self._joint_offsets) * self._joint_signs
+    def get_joint_state(self) -> np.ndarray:
+        pos = (self._driver.get_joints() - self._joint_offsets) * self._joint_signs
         assert len(pos) == self.num_dofs()
 
         if self.gripper_open_close is not None:
@@ -117,41 +113,16 @@ class DynamixelRobot(Robot):
                 self.gripper_open_close[1] - self.gripper_open_close[0]
             )
             g_pos = min(max(0, g_pos), 1)
-            if g_pos <= self._gripper_zero_deadband:
-                g_pos = 0.0
             pos[-1] = g_pos
 
+        if self._last_pos is None:
+            self._last_pos = pos
+        else:
+            # exponential smoothing
+            pos = self._last_pos * (1 - self._alpha) + pos * self._alpha
+            self._last_pos = pos
+
         return pos
-
-    def _map_driver_velocities(self, raw_vel: np.ndarray) -> np.ndarray:
-        vel = raw_vel * self._joint_signs
-        assert len(vel) == self.num_dofs()
-
-        # The gripper joint is indirect/normalized, so present velocity is not
-        # a useful feedforward target for the follower.
-        if self.gripper_open_close is not None and vel.size > 0:
-            vel[-1] = 0.0
-
-        return vel
-
-    def get_joint_state(self) -> np.ndarray:
-        pos, _ = self.get_joint_state_with_timestamp()
-        return pos
-
-    def get_joint_state_with_timestamp(self) -> Tuple[np.ndarray, float]:
-        raw_pos, timestamp = self._driver.get_joints_with_timestamp()
-        pos = self._map_driver_positions(raw_pos)
-        return pos, timestamp
-
-    def get_joint_state_and_velocity_with_timestamp(
-        self,
-    ) -> Tuple[np.ndarray, np.ndarray, float]:
-        raw_pos, raw_vel, timestamp = (
-            self._driver.get_positions_velocities_and_timestamp()
-        )
-        pos = self._map_driver_positions(raw_pos)
-        vel = self._map_driver_velocities(raw_vel)
-        return pos, vel, timestamp
 
     def command_joint_state(self, joint_state: np.ndarray) -> None:
         self._driver.set_joints((joint_state + self._joint_offsets).tolist())

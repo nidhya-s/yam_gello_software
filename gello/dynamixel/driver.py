@@ -100,16 +100,6 @@ class DynamixelDriverProtocol(Protocol):
         """Get joint positions (rad) and velocities (rad/s)."""
         ...
 
-    def get_joints_with_timestamp(self) -> Tuple[np.ndarray, float]:
-        """Get joint positions (rad) and the driver sample timestamp."""
-        ...
-
-    def get_positions_velocities_and_timestamp(
-        self,
-    ) -> Tuple[np.ndarray, np.ndarray, float]:
-        """Get positions (rad), velocities (rad/s), and driver sample timestamp."""
-        ...
-
     def close(self):
         """Close the driver."""
 
@@ -160,15 +150,6 @@ class FakeDynamixelDriver(DynamixelDriverProtocol):
     def get_positions_and_velocities(self) -> Tuple[np.ndarray, np.ndarray]:
         return self._joint_angles.copy(), self._velocities.copy()
 
-    def get_joints_with_timestamp(self) -> Tuple[np.ndarray, float]:
-        return self.get_joints(), time.perf_counter()
-
-    def get_positions_velocities_and_timestamp(
-        self,
-    ) -> Tuple[np.ndarray, np.ndarray, float]:
-        pos, vel = self.get_positions_and_velocities()
-        return pos, vel, time.perf_counter()
-
     def get_positions(self) -> np.ndarray:
         return self.get_joints()
 
@@ -199,7 +180,6 @@ class DynamixelDriver(DynamixelDriverProtocol):
         self._ids = ids
         self._joint_angles = None
         self._velocities = None
-        self._last_read_timestamp: Optional[float] = None
         self._lock = Lock()
         self._port = port
         self._baudrate = baudrate
@@ -468,96 +448,68 @@ class DynamixelDriver(DynamixelDriverProtocol):
 
     def _read_joint_states(self):
         # Continuously read joint angles and velocities
-        _fail_counts = {dxl_id: 0 for dxl_id in self._ids}
         while not self._stop_thread.is_set():
             time.sleep(0.001)
-            try:
-                with self._lock:
-                    _joint_angles = np.zeros(len(self._ids), dtype=int)
-                    _velocities = np.zeros(len(self._ids), dtype=int)
-                    dxl_comm_result = self._groupSyncRead.txRxPacket()
-                    if dxl_comm_result != COMM_SUCCESS:
-                        print(f"warning, comm failed: {dxl_comm_result}")
-                        continue
-                    sample_timestamp = time.perf_counter()
-                    # All-or-nothing publish: if any servo fails this cycle,
-                    # discard the whole sample and keep the previous state.
-                    # Publishing partially zero-filled arrays could command a
-                    # leader joint to read as 0 rad and produce a sudden jump.
-                    all_ok = True
-                    for i, dxl_id in enumerate(self._ids):
-                        if self._groupSyncRead.isAvailable(
+            with self._lock:
+                _joint_angles = np.zeros(len(self._ids), dtype=int)
+                _velocities = np.zeros(len(self._ids), dtype=int)
+                dxl_comm_result = self._groupSyncRead.txRxPacket()
+                if dxl_comm_result != COMM_SUCCESS:
+                    print(f"warning, comm failed: {dxl_comm_result}")
+                    continue
+                for i, dxl_id in enumerate(self._ids):
+                    # velocity
+                    if self._groupSyncRead.isAvailable(
+                        dxl_id, ADDR_PRESENT_VELOCITY, LEN_PRESENT_VELOCITY
+                    ):
+                        velocity = self._groupSyncRead.getData(
                             dxl_id, ADDR_PRESENT_VELOCITY, LEN_PRESENT_VELOCITY
-                        ):
-                            velocity = self._groupSyncRead.getData(
-                                dxl_id, ADDR_PRESENT_VELOCITY, LEN_PRESENT_VELOCITY
-                            )
-                            if velocity > 0x7FFFFFFF:
-                                velocity -= 0x100000000
-                            _velocities[i] = velocity
-                        else:
-                            _fail_counts[dxl_id] += 1
-                            if _fail_counts[dxl_id] <= 5 or _fail_counts[dxl_id] % 100 == 0:
-                                print(f"[DXL] Servo ID {dxl_id} velocity unavailable (fail #{_fail_counts[dxl_id]})")
-                            all_ok = False
-                            continue
-                        if self._groupSyncRead.isAvailable(
+                        )
+                        # sign correction for 32-bit two's complement
+                        if velocity > 0x7FFFFFFF:
+                            velocity -= 0x100000000
+                        _velocities[i] = velocity
+                    else:
+                        raise RuntimeError(
+                            f"Failed to get velocity for Dynamixel with ID {dxl_id}"
+                        )
+                    # position
+                    if self._groupSyncRead.isAvailable(
+                        dxl_id, ADDR_PRESENT_POSITION, LEN_PRESENT_POSITION
+                    ):
+                        angle = self._groupSyncRead.getData(
                             dxl_id, ADDR_PRESENT_POSITION, LEN_PRESENT_POSITION
-                        ):
-                            angle = self._groupSyncRead.getData(
-                                dxl_id, ADDR_PRESENT_POSITION, LEN_PRESENT_POSITION
-                            )
-                            if angle > 0x7FFFFFFF:
-                                angle -= 0x100000000
-                            _joint_angles[i] = angle
-                        else:
-                            _fail_counts[dxl_id] += 1
-                            if _fail_counts[dxl_id] <= 5 or _fail_counts[dxl_id] % 100 == 0:
-                                print(f"[DXL] Servo ID {dxl_id} position unavailable (fail #{_fail_counts[dxl_id]})")
-                            all_ok = False
-                            continue
-                        _fail_counts[dxl_id] = 0
-                    if all_ok:
-                        self._joint_angles = _joint_angles
-                        self._velocities = _velocities
-                        self._last_read_timestamp = sample_timestamp
-            except Exception as e:
-                print(f"[DXL] Reading thread exception: {e}")
-                continue
+                        )
+                        # sign correction for 32-bit two's complement
+                        if angle > 0x7FFFFFFF:
+                            angle -= 0x100000000
+                        _joint_angles[i] = angle
+                    else:
+                        raise RuntimeError(
+                            f"Failed to get joint angles for Dynamixel with ID {dxl_id}"
+                        )
+                self._joint_angles = _joint_angles
+                self._velocities = _velocities
             # self._groupSyncRead.clearParam()
 
-    def get_positions_velocities_and_timestamp(
-        self,
-    ) -> Tuple[np.ndarray, np.ndarray, float]:
-        if self._is_fake:
-            return (
-                self._fake_joint_angles.copy(),
-                self._fake_velocities.copy(),
-                time.perf_counter(),
-            )
-        while (
-            self._joint_angles is None
-            or self._velocities is None
-            or self._last_read_timestamp is None
-        ):
-            time.sleep(0.1)
-        with self._lock:
-            positions_in_radians = self._joint_angles.copy() / 2048.0 * np.pi
-            velocities_in_units = self._velocities.copy() * 0.229 * 2 * np.pi / 60
-            timestamp = float(self._last_read_timestamp)
-        return positions_in_radians, velocities_in_units, timestamp
-
     def get_positions_and_velocities(self) -> Tuple[np.ndarray, np.ndarray]:
-        positions, velocities, _ = self.get_positions_velocities_and_timestamp()
-        return positions, velocities
-
-    def get_joints_with_timestamp(self) -> Tuple[np.ndarray, float]:
-        positions, _, timestamp = self.get_positions_velocities_and_timestamp()
-        return positions, timestamp
+        if self._is_fake:
+            return self._fake_joint_angles.copy(), self._fake_velocities.copy()
+        while self._joint_angles is None or self._velocities is None:
+            time.sleep(0.1)
+        positions_in_radians = self._joint_angles.copy() / 2048.0 * np.pi
+        velocities_in_units = self._velocities.copy() * 0.229 * 2 * np.pi / 60
+        return positions_in_radians, velocities_in_units
 
     def get_joints(self) -> np.ndarray:
-        positions, _ = self.get_joints_with_timestamp()
-        return positions
+        if self._is_fake:
+            return self._fake_joint_angles.copy()
+
+        # Return a copy of the joint_angles array to avoid race conditions
+        while self._joint_angles is None:
+            time.sleep(0.1)
+        _j = self._joint_angles.copy()
+        return _j / 2048.0 * np.pi
 
     def get_positions(self) -> np.ndarray:
         return self.get_joints()
