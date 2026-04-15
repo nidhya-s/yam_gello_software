@@ -22,6 +22,45 @@ class RobotEnv:
         self._cycle_time = 1.0 / control_rate_hz
         self._rate = Rate(control_rate_hz)
         self._camera_dict = {} if camera_dict is None else camera_dict
+
+    def _command_action(self, action: Any) -> None:
+        """Validate and send an action without rate sleeping."""
+        num_dofs = self._robot.num_dofs()
+        if isinstance(action, dict):
+            pos = action["pos"]
+            assert len(pos) == num_dofs, (
+                f"input pos:{len(pos)}, robot:{num_dofs}"
+            )
+            assert np.all(np.isfinite(pos)), "action pos must be finite"
+            # Build a new dict so we never mutate the caller's action (it is
+            # still used for save/debug) and so timestamp/extra keys don't
+            # flow into the robot layer.
+            robot_action: Dict[str, Any] = {"pos": pos}
+            if "vel" in action and action["vel"] is not None:
+                vel = action["vel"]
+                assert len(vel) == num_dofs, (
+                    f"input vel:{len(vel)}, robot:{num_dofs}"
+                )
+                assert np.all(np.isfinite(vel)), "action vel must be finite"
+                robot_action["vel"] = vel
+            self._robot.command_joint_state(robot_action)
+        else:
+            assert len(action) == num_dofs, (
+                f"input:{len(action)}, robot:{num_dofs}"
+            )
+            self._robot.command_joint_state(action)
+
+    def begin_step(self, action: Any) -> float:
+        """Command an action immediately and return the step start time."""
+        t_step_start = time.perf_counter()
+        self._command_action(action)
+        return t_step_start
+
+    def finish_step(self, _step_start: float) -> Dict[str, Any]:
+        """Rate sleep and return observations."""
+        self._rate.sleep()
+        return self.get_obs()
+
     def robot(self) -> Robot:
         """Get the robot object.
         Returns:
@@ -30,20 +69,17 @@ class RobotEnv:
         return self._robot
     def __len__(self):
         return 0
-    def step(self, joints: np.ndarray) -> Dict[str, Any]:
+    def step(self, action: Any) -> Dict[str, Any]:
         """Step the environment forward.
         Args:
-            joints: joint angles command to step the environment with.
+            action: either a legacy position-only ndarray of length num_dofs,
+                or a dict {"pos": ndarray, "vel"?: ndarray, "timestamp"?: float}.
+                The "timestamp" key is metadata for lag analysis and is not
+                forwarded to the robot.
         Returns:
             obs: observation from the environment.
         """
-        assert len(joints) == (
-            self._robot.num_dofs()
-        ), f"input:{len(joints)}, robot:{self._robot.num_dofs()}"
-        assert self._robot.num_dofs() == len(joints)
-        self._robot.command_joint_state(joints)
-        # self._rate.sleep() Sleep is inconsistent
-        return self.get_obs()
+        return self.finish_step(self.begin_step(action))
     def get_obs(self) -> Dict[str, Any]:
         """Get observation from the environment.
         Returns:

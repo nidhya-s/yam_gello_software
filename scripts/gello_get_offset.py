@@ -19,6 +19,9 @@ class Args:
     port: str = "/dev/ttyUSB0"
     """The port that GELLO is connected to."""
 
+    baudrate: int = 1_000_000
+    """The Dynamixel baudrate configured on the GELLO chain."""
+
     start_joints: Tuple[float, ...] = (0, 0, 0, 0, 0, 0)
     """The joint angles that the GELLO is placed in at (in radians)."""
 
@@ -47,7 +50,7 @@ class Args:
 
 def get_config(args: Args) -> None:
     joint_ids = list(range(1, args.num_joints + 1))
-    driver = DynamixelDriver(joint_ids, port=args.port, baudrate=57600)
+    driver = DynamixelDriver(joint_ids, port=args.port, baudrate=args.baudrate)
 
     # assume that the joint state shouold be args.start_joints
     # find the offset, which is a multiple of np.pi/2 that minimizes the error between the current joint state and args.start_joints

@@ -92,27 +92,33 @@ def get_follower_joint_positions(robot):
         robot: Robot object (could be YAMRobot or wrapped in BimanualRobot)
         
     Returns:
-        tuple: (joint_positions, timestamp) where joint_positions is np.ndarray or None, 
-               timestamp is int (nanoseconds from perf_counter), or None if not available
+        tuple: (joint_positions, timestamp) where joint_positions is np.ndarray or None,
+               timestamp is float seconds from time.perf_counter() captured after the
+               follower reads complete. Same monotonic clock as control_data_timestamp
+               in control_utils.run_control_loop.
     """
     import time
-    timestamp = time.perf_counter()
-    
+
     if hasattr(robot, '_robot_l') and hasattr(robot, '_robot_r'):
         left_robot = robot._robot_l
         right_robot = robot._robot_r
-        
+
         left_joints = None
         right_joints = None
-        
+
         if isinstance(left_robot, YAMRobot):
             i2rt_robot_l = left_robot.robot
             left_joints = np.array(i2rt_robot_l.get_joint_pos())
-        
+
         if isinstance(right_robot, YAMRobot):
             i2rt_robot_r = right_robot.robot
             right_joints = np.array(i2rt_robot_r.get_joint_pos())
-        
+
+        # Capture after the reads so the timestamp reflects when the follower
+        # joint data actually arrived. Must stay paired with the leader
+        # timestamp semantics in run_control_loop — both are "data just arrived".
+        timestamp = time.perf_counter()
+
         if left_joints is not None and right_joints is not None:
             joints = np.concatenate((left_joints, right_joints))
             return joints, timestamp
@@ -122,9 +128,13 @@ def get_follower_joint_positions(robot):
             return right_joints, timestamp
         else:
             return None, timestamp
-    
-    # No robot or not bimanual - return None with timestamp
-    return None, timestamp
+
+    if isinstance(robot, YAMRobot):
+        joints = np.array(robot.robot.get_joint_pos())
+        return joints, time.perf_counter()
+
+    # No YAM robot - return None with timestamp
+    return None, time.perf_counter()
 
 
 @dataclass
@@ -290,11 +300,16 @@ def main():
 
     # Run main control loop
     try:
+        follower_reader = (
+            (lambda: get_follower_joint_positions(robot))
+            if save_interface is not None
+            else None
+        )
         run_control_loop(
             env, 
             agent, 
             save_interface, 
-            get_follower_joints_fn=lambda: get_follower_joint_positions(robot)
+            get_follower_joints_fn=follower_reader,
         )
     except KeyboardInterrupt:
         print("\nControl loop interrupted by user")

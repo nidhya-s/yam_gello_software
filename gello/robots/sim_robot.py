@@ -1,6 +1,7 @@
 import pickle
 import threading
 import time
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import mujoco
@@ -12,6 +13,21 @@ from dm_control import mjcf
 from gello.robots.robot import Robot
 
 assert mujoco.viewer is mujoco.viewer
+
+
+_GELLO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _resolve_resource_path(path: Optional[str]) -> Optional[str]:
+    if path is None:
+        return None
+    candidate = Path(path).expanduser()
+    if candidate.exists():
+        return str(candidate)
+    gello_relative = _GELLO_ROOT / candidate
+    if gello_relative.exists():
+        return str(gello_relative)
+    return str(candidate)
 
 
 def attach_hand_to_arm(
@@ -55,12 +71,12 @@ def build_scene(robot_xml_path: str, gripper_xml_path: Optional[str] = None):
     # assert robot_xml_path.endswith(".xml")
 
     arena = mjcf.RootElement()
-    arm_simulate = mjcf.from_path(robot_xml_path)
+    arm_simulate = mjcf.from_path(_resolve_resource_path(robot_xml_path))
     # arm_copy = mjcf.from_path(xml_path)
 
     if gripper_xml_path is not None:
         # attach gripper to the robot at "attachment_site"
-        gripper_simulate = mjcf.from_path(gripper_xml_path)
+        gripper_simulate = mjcf.from_path(_resolve_resource_path(gripper_xml_path))
         attach_hand_to_arm(arm_simulate, gripper_simulate)
 
     arena.worldbody.attach(arm_simulate)
@@ -91,6 +107,7 @@ class ZMQRobotServer:
         addr = f"tcp://{host}:{port}"
         self._socket.bind(addr)
         self._stop_event = threading.Event()
+        self._closed = False
 
     def serve(self) -> None:
         """Serve the robot state and commands over ZMQ."""
@@ -123,11 +140,18 @@ class ZMQRobotServer:
             except zmq.error.Again:
                 print("Timeout in ZMQLeaderServer serve")
                 # Timeout occurred, check if the stop event is set
+            except (zmq.error.ContextTerminated, zmq.error.ZMQError):
+                if not self._stop_event.is_set():
+                    raise
+                break
 
     def stop(self) -> None:
+        if self._closed:
+            return
         self._stop_event.set()
-        self._socket.close()
+        self._socket.close(linger=0)
         self._context.term()
+        self._closed = True
 
 
 class MujocoRobotServer:
@@ -139,6 +163,9 @@ class MujocoRobotServer:
         port: int = 5556,
         print_joints: bool = False,
     ):
+        self._zmq_server = None
+        self._zmq_server_thread = None
+        self._stop_event = threading.Event()
         self._has_gripper = gripper_xml_path is not None
         arena = build_scene(xml_path, gripper_xml_path)
 
@@ -172,7 +199,10 @@ class MujocoRobotServer:
     def get_joint_state(self) -> np.ndarray:
         return self._joint_state
 
-    def command_joint_state(self, joint_state: np.ndarray) -> None:
+    def command_joint_state(self, joint_state: Any) -> None:
+        if isinstance(joint_state, dict):
+            joint_state = joint_state["pos"]
+        joint_state = np.asarray(joint_state, dtype=np.float64)
         assert len(joint_state) == self._num_joints, (
             f"Expected joint state of length {self._num_joints}, "
             f"got {len(joint_state)}."
@@ -218,39 +248,50 @@ class MujocoRobotServer:
     def serve(self) -> None:
         # start the zmq server
         self._zmq_server_thread.start()
-        with mujoco.viewer.launch_passive(self._model, self._data) as viewer:
-            while viewer.is_running():
-                step_start = time.time()
+        try:
+            with mujoco.viewer.launch_passive(self._model, self._data) as viewer:
+                while viewer.is_running() and not self._stop_event.is_set():
+                    step_start = time.time()
 
-                # mj_step can be replaced with code that also evaluates
-                # a policy and applies a control signal before stepping the physics.
-                self._data.ctrl[:] = self._joint_cmd
-                # self._data.qpos[:] = self._joint_cmd
-                mujoco.mj_step(self._model, self._data)
-                self._joint_state = self._data.qpos.copy()[: self._num_joints]
+                    # mj_step can be replaced with code that also evaluates
+                    # a policy and applies a control signal before stepping the physics.
+                    self._data.ctrl[:] = self._joint_cmd
+                    # self._data.qpos[:] = self._joint_cmd
+                    mujoco.mj_step(self._model, self._data)
+                    self._joint_state = self._data.qpos.copy()[: self._num_joints]
 
-                if self._print_joints:
-                    print(self._joint_state)
+                    if self._print_joints:
+                        print(self._joint_state)
 
-                # Example modification of a viewer option: toggle contact points every two seconds.
-                with viewer.lock():
-                    # TODO remove?
-                    viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTPOINT] = int(
-                        self._data.time % 2
+                    # Example modification of a viewer option: toggle contact points every two seconds.
+                    with viewer.lock():
+                        # TODO remove?
+                        viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTPOINT] = int(
+                            self._data.time % 2
+                        )
+
+                    # Pick up changes to the physics state, apply perturbations, update options from GUI.
+                    viewer.sync()
+
+                    # Rudimentary time keeping, will drift relative to wall clock.
+                    time_until_next_step = self._model.opt.timestep - (
+                        time.time() - step_start
                     )
-
-                # Pick up changes to the physics state, apply perturbations, update options from GUI.
-                viewer.sync()
-
-                # Rudimentary time keeping, will drift relative to wall clock.
-                time_until_next_step = self._model.opt.timestep - (
-                    time.time() - step_start
-                )
-                if time_until_next_step > 0:
-                    time.sleep(time_until_next_step)
+                    if time_until_next_step > 0:
+                        time.sleep(time_until_next_step)
+        finally:
+            if self._zmq_server is not None:
+                self._zmq_server.stop()
 
     def stop(self) -> None:
-        self._zmq_server_thread.join()
+        self._stop_event.set()
+        if self._zmq_server is not None:
+            self._zmq_server.stop()
+        if self._zmq_server_thread is not None and self._zmq_server_thread.is_alive():
+            self._zmq_server_thread.join(timeout=2)
 
     def __del__(self) -> None:
-        self.stop()
+        try:
+            self.stop()
+        except Exception:
+            pass

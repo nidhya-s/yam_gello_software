@@ -62,6 +62,8 @@ teleop:
   robot:
     _target_: gello.robots.yam.YAMRobot
     channel: can_right
+    velocity_feedforward_eta: 0.9
+    velocity_feedforward_max_vel: 6.0
   mapping:
     # Map leader joints to follower joints
     index_map: [0, 1, 2, 3, 4, 5]
