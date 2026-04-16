@@ -3,6 +3,7 @@ from typing import Dict
 
 import numpy as np
 
+from gello.agents.agent import Action, action_pos
 from gello.robots.robot import Robot
 
 MAX_OPEN = 0.09
@@ -44,14 +45,15 @@ class PandaRobot(Robot):
         pos = np.append(robot_joints, gripper_pos.width / MAX_OPEN)
         return pos
 
-    def command_joint_state(self, joint_state: np.ndarray) -> None:
+    def command_joint_state(self, action: Action) -> None:
         """Command the leader robot to a given state.
 
         Args:
-            joint_state (np.ndarray): The state to command the leader robot to.
+            action: Action dict containing at least {"pos": ndarray}.
         """
         import torch
 
+        joint_state = action_pos(action)
         self.robot.update_desired_joint_positions(torch.tensor(joint_state[:-1]))
         self.gripper.goto(width=(MAX_OPEN * (1 - joint_state[-1])), speed=1, force=1)
 

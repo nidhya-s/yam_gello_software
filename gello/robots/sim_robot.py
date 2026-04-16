@@ -9,6 +9,7 @@ import numpy as np
 import zmq
 from dm_control import mjcf
 
+from gello.agents.agent import Action, action_pos
 from gello.robots.robot import Robot
 
 assert mujoco.viewer is mujoco.viewer
@@ -172,7 +173,8 @@ class MujocoRobotServer:
     def get_joint_state(self) -> np.ndarray:
         return self._joint_state
 
-    def command_joint_state(self, joint_state: np.ndarray) -> None:
+    def command_joint_state(self, action: Action) -> None:
+        joint_state = action_pos(action)
         assert len(joint_state) == self._num_joints, (
             f"Expected joint state of length {self._num_joints}, "
             f"got {len(joint_state)}."

@@ -1,8 +1,13 @@
 import time
 from typing import Any, Dict, Optional
+
 import numpy as np
+
+from gello.agents.agent import Action, action_pos
 from gello.cameras.camera import CameraDriver
 from gello.robots.robot import Robot
+
+
 class Rate:
     def __init__(self, rate: float):
         self.last = time.time()
@@ -30,20 +35,39 @@ class RobotEnv:
         return self._robot
     def __len__(self):
         return 0
-    def step(self, joints: np.ndarray) -> Dict[str, Any]:
-        """Step the environment forward.
-        Args:
-            joints: joint angles command to step the environment with.
-        Returns:
-            obs: observation from the environment.
+
+    def _command_action(self, action: Action) -> None:
+        joints = action_pos(action)
+        num_dofs = self._robot.num_dofs()
+        assert len(joints) == num_dofs, f"input:{len(joints)}, robot:{num_dofs}"
+        assert np.all(np.isfinite(joints)), "action pos must be finite"
+
+        robot_action: Action = {"pos": joints}
+        if "vel" in action and action["vel"] is not None:
+            vel = action["vel"]
+            assert len(vel) == num_dofs, f"input vel:{len(vel)}, robot:{num_dofs}"
+            assert np.all(np.isfinite(vel)), "action vel must be finite"
+            robot_action["vel"] = vel
+
+        self._robot.command_joint_state(robot_action)
+
+    def begin_step(self, action: Action) -> float:
+        """Command an action immediately and return the step start time."""
+        step_start = time.perf_counter()
+        self._command_action(action)
+        return step_start
+
+    def finish_step(self, _step_start: float) -> Dict[str, Any]:
+        """Return observations after a command.
+
+        This preserves the existing no-sleep teleop behavior; timing is still
+        driven by the serial, CAN, and recording work in the control loop.
         """
-        assert len(joints) == (
-            self._robot.num_dofs()
-        ), f"input:{len(joints)}, robot:{self._robot.num_dofs()}"
-        assert self._robot.num_dofs() == len(joints)
-        self._robot.command_joint_state(joints)
-        # self._rate.sleep() Sleep is inconsistent
         return self.get_obs()
+
+    def step(self, action: Action) -> Dict[str, Any]:
+        """Step the environment forward."""
+        return self.finish_step(self.begin_step(action))
     def get_obs(self) -> Dict[str, Any]:
         """Get observation from the environment.
         Returns:

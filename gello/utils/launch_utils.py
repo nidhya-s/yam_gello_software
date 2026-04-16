@@ -6,6 +6,8 @@ from typing import Any, Dict, Optional
 import numpy as np
 from omegaconf import OmegaConf
 
+from gello.agents.agent import action_pos
+
 
 class SimpleLaunchManager:
     """Simplified launch manager for robot systems."""
@@ -102,12 +104,12 @@ class SimpleLaunchManager:
     def move_to_joints(self, joints: np.ndarray):
         """Move robot to specified joints."""
         for jnt in np.linspace(self.env.get_obs()["joint_positions"], joints, 100):
-            self.env.step(jnt)
+            self.env.step({"pos": jnt})
             time.sleep(0.001)
 
     def validate_agent_output(self):
         """Validate that agent output matches environment dimensions."""
-        start_pos = self.agent.act(self.env.get_obs())
+        start_pos = action_pos(self.agent.act(self.env.get_obs()))
         obs = self.env.get_obs()
         joints = obs["joint_positions"]
 
@@ -155,13 +157,13 @@ class SimpleLaunchManager:
         max_delta = 1.0
         for _ in range(25):
             obs = self.env.get_obs()
-            command_joints = self.agent.act(obs)
+            command_joints = action_pos(self.agent.act(obs))
             current_joints = obs["joint_positions"]
             delta = command_joints - current_joints
             max_joint_delta = np.abs(delta).max()
             if max_joint_delta > max_delta:
                 delta = delta / max_joint_delta * max_delta
-            self.env.step(current_joints + delta)
+            self.env.step({"pos": current_joints + delta})
 
         # Main control loop
         print("Starting main control loop...")
@@ -227,7 +229,7 @@ def move_to_start_position(
 
     print(f"Moving robot to start position: {reset_joints}")
     for jnt in np.linspace(curr_joints, reset_joints, steps):
-        env.step(jnt)
+        env.step({"pos": jnt})
         time.sleep(0.001)
 
 

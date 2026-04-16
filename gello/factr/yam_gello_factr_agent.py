@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional, Tuple, Sequence
 import numpy as np
 import os
 
-from gello.agents.agent import Agent
+from gello.agents.agent import Action, Agent, action_pos
 from gello.dynamixel.driver import DynamixelDriver
 from gello.factr.gravity_compensation import FACTRGravityCompensation
 
@@ -324,7 +324,7 @@ class YAMGelloRobot:
         state = self.get_joint_state()
         return state["pos"]
 
-    def act(self, obs: Dict[str, Any]) -> np.ndarray:
+    def act(self, obs: Dict[str, Any]) -> Action:
         """Teleop action method - required by Agent protocol.
 
         This method handles teleop input and returns joint actions.
@@ -349,7 +349,7 @@ class YAMGelloRobot:
                 gripper_pos = 0.5  # Middle position
             current_positions = np.concatenate([current_positions, [gripper_pos]])
 
-        return current_positions
+        return {"pos": current_positions}
 
     def _switch_to_position_control(self):
         """Switch to position control mode for gripper control."""
@@ -454,12 +454,13 @@ class YAMGelloRobot:
             print(f"Error getting gripper position: {e}")
             return 0.0
 
-    def command_joint_state(self, joint_state: np.ndarray) -> None:
+    def command_joint_state(self, action: Action) -> None:
         """Command joint positions including gripper.
 
         Args:
-            joint_state: Array of joint positions (arm joints + gripper if configured)
+            action: Action dict containing at least {"pos": ndarray}.
         """
+        joint_state = action_pos(action)
         if self._sim_mode or self.driver is None:
             print(
                 "Cannot command joint state in simulation mode or when driver is not available"
@@ -534,7 +535,7 @@ class YAMGelloAgent(Agent):
                 # Start in position mode for safety
                 self.robot.set_torque_mode(False)
 
-    def act(self, obs: Dict[str, Any]) -> np.ndarray:
+    def act(self, obs: Dict[str, Any]) -> Action:
         """Get action from robot - matches gello_software GelloAgent pattern."""
         if self.regularize_joints is not None:
             # In a real implementation, this would command joint positions
@@ -548,7 +549,7 @@ class YAMGelloAgent(Agent):
 
         # The robot.get_joint_state() now properly includes gripper position
         # No need to manually append gripper position
-        return joint_state
+        return {"pos": joint_state}
 
     def set_torque_mode(self, torque_mode: bool) -> None:
         """Set torque control mode."""

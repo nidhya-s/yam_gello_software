@@ -521,7 +521,7 @@ class FACTRGravityCompensation:
             return
         steps = int(min(max(np.abs(curr - target_joints).max() / 0.01, 1), 100))
         for jnt in np.linspace(curr, target_joints, steps):
-            self.teleop_env.step(jnt)
+            self.teleop_env.step({"pos": jnt})
             time.sleep(0.001)
 
     def _build_follower_action(
@@ -603,7 +603,7 @@ class FACTRGravityCompensation:
                         + action * self.teleop_smoothing_alpha
                     )
                     self._teleop_last_action = action
-                self.teleop_env.step(action)
+                self.teleop_env.step({"pos": action})
             except Exception as e:
                 print(f"Teleop loop warning: {e}")
             # Timing

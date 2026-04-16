@@ -1,30 +1,30 @@
 import pickle
 from pathlib import Path
-import time
-from typing import Dict
+from typing import Any, Dict
 
-import numpy as np
+from gello.agents.agent import Action, action_pos
 
 
 def save_frame(
     file: Path,
-    timestamp: time.perf_counter_ns,
-    obs: Dict[str, np.ndarray],
-    action: np.ndarray,
+    timestamp: int,
+    obs: Dict[str, Any],
+    action: Action,
 ) -> None:
     obs_copy = dict(obs)
-    # Only keep: joint_positions, control, control_timestamp, follower_joints, follower_timestamp
+    # Keep the saved control schema numeric even though live actions are dicts.
     filtered_obs = {}
-    
+
     # Keep joint_positions just in case
     if "joint_positions" in obs_copy:
         filtered_obs["joint_positions"] = obs_copy["joint_positions"]
-    
-    # Store control and control timestamp
-    filtered_obs["control"] = action
+
+    filtered_obs["control"] = action_pos(action)
+    if "vel" in action and action["vel"] is not None:
+        filtered_obs["control_vel"] = action["vel"]
     if "control_data_timestamp" in obs_copy:
         filtered_obs["control_timestamp"] = obs_copy["control_data_timestamp"]
-    
+
     # Store follower joints and follower timestamp
     if "follower_joint_positions" in obs_copy:
         filtered_obs["follower_joints"] = obs_copy["follower_joint_positions"]

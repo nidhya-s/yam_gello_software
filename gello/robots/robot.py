@@ -1,7 +1,10 @@
 from abc import abstractmethod
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Protocol
 
 import numpy as np
+
+from gello.agents.agent import Action, action_pos
 
 
 class Robot(Protocol):
@@ -29,11 +32,11 @@ class Robot(Protocol):
         raise NotImplementedError
 
     @abstractmethod
-    def command_joint_state(self, joint_state: np.ndarray) -> None:
+    def command_joint_state(self, action: Action) -> None:
         """Command the leader robot to a given state.
 
         Args:
-            joint_state (np.ndarray): The state to command the leader robot to.
+            action: Action dict containing at least {"pos": ndarray}.
         """
         raise NotImplementedError
 
@@ -65,7 +68,8 @@ class PrintRobot(Robot):
     def get_joint_state(self) -> np.ndarray:
         return self._joint_state
 
-    def command_joint_state(self, joint_state: np.ndarray) -> None:
+    def command_joint_state(self, action: Action) -> None:
+        joint_state = action_pos(action)
         assert len(joint_state) == (self._num_dofs), (
             f"Expected joint state of length {self._num_dofs}, "
             f"got {len(joint_state)}."
@@ -86,9 +90,20 @@ class PrintRobot(Robot):
 
 
 class BimanualRobot(Robot):
-    def __init__(self, robot_l: Robot, robot_r: Robot):
+    def __init__(
+        self,
+        robot_l: Robot,
+        robot_r: Robot,
+        parallel_commands: bool = False,
+    ):
         self._robot_l = robot_l
         self._robot_r = robot_r
+        self._parallel_commands = bool(parallel_commands)
+        self._executor = (
+            ThreadPoolExecutor(max_workers=2, thread_name_prefix="bimanual_robot")
+            if self._parallel_commands
+            else None
+        )
 
     def num_dofs(self) -> int:
         return self._robot_l.num_dofs() + self._robot_r.num_dofs()
@@ -98,9 +113,40 @@ class BimanualRobot(Robot):
             (self._robot_l.get_joint_state(), self._robot_r.get_joint_state())
         )
 
-    def command_joint_state(self, joint_state: np.ndarray) -> None:
-        self._robot_l.command_joint_state(joint_state[: self._robot_l.num_dofs()])
-        self._robot_r.command_joint_state(joint_state[self._robot_l.num_dofs() :])
+    def command_joint_state(self, action: Action) -> None:
+        joint_state = action_pos(action)
+        split = self._robot_l.num_dofs()
+        left_action: Action = {"pos": joint_state[:split]}
+        right_action: Action = {"pos": joint_state[split:]}
+        if "vel" in action:
+            left_action["vel"] = action["vel"][:split]
+            right_action["vel"] = action["vel"][split:]
+
+        if self._executor is not None:
+            left_future = self._executor.submit(
+                self._robot_l.command_joint_state, left_action
+            )
+            right_future = self._executor.submit(
+                self._robot_r.command_joint_state, right_action
+            )
+            left_error = None
+            right_error = None
+            try:
+                left_future.result()
+            except BaseException as exc:
+                left_error = exc
+            try:
+                right_future.result()
+            except BaseException as exc:
+                right_error = exc
+            if left_error is not None:
+                raise left_error
+            if right_error is not None:
+                raise right_error
+            return
+
+        self._robot_l.command_joint_state(left_action)
+        self._robot_r.command_joint_state(right_action)
 
     def get_observations(self) -> Dict[str, np.ndarray]:
         l_obs = self._robot_l.get_observations()
@@ -118,6 +164,13 @@ class BimanualRobot(Robot):
                 raise RuntimeError()
 
         return return_obs
+
+    def close(self) -> None:
+        for robot in (self._robot_l, self._robot_r):
+            if hasattr(robot, "close"):
+                robot.close()
+        if self._executor is not None:
+            self._executor.shutdown(wait=True, cancel_futures=True)
 
 
 def main():

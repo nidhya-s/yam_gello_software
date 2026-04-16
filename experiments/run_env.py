@@ -6,6 +6,7 @@ from typing import Optional, Tuple
 import numpy as np
 import tyro
 
+from gello.agents.agent import action_pos
 from gello.env import RobotEnv
 from gello.robots.robot import PrintRobot
 from gello.utils.launch_utils import instantiate_from_dict
@@ -119,7 +120,7 @@ def main(args):
         steps = min(int(max_delta / 0.01), 100)
 
         for jnt in np.linspace(curr_joints, reset_joints, steps):
-            env.step(jnt)
+            env.step({"pos": jnt})
     else:
         if args.agent == "gello":
             gello_port = args.gello_port
@@ -151,7 +152,7 @@ def main(args):
                 steps = min(int(max_delta / 0.01), 100)
 
                 for jnt in np.linspace(curr_joints, reset_joints, steps):
-                    env.step(jnt)
+                    env.step({"pos": jnt})
                     time.sleep(0.001)
         elif args.agent == "quest":
             agent_cfg = {
@@ -178,7 +179,7 @@ def main(args):
     agent = instantiate_from_dict(agent_cfg)
     # going to start position
     print("Going to start position")
-    start_pos = agent.act(env.get_obs())
+    start_pos = action_pos(agent.act(env.get_obs()))
     obs = env.get_obs()
     joints = obs["joint_positions"]
 
@@ -209,17 +210,17 @@ def main(args):
     max_delta = 0.05
     for _ in range(25):
         obs = env.get_obs()
-        command_joints = agent.act(obs)
+        command_joints = action_pos(agent.act(obs))
         current_joints = obs["joint_positions"]
         delta = command_joints - current_joints
         max_joint_delta = np.abs(delta).max()
         if max_joint_delta > max_delta:
             delta = delta / max_joint_delta * max_delta
-        env.step(current_joints + delta)
+        env.step({"pos": current_joints + delta})
 
     obs = env.get_obs()
     joints = obs["joint_positions"]
-    action = agent.act(obs)
+    action = action_pos(agent.act(obs))
     if (action - joints > 0.5).any():
         print("Action is too big")
 

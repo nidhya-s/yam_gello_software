@@ -1,7 +1,10 @@
 import atexit
 import signal
+import sys
 import threading
 import time
+import traceback
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,46 +22,71 @@ from gello.robots.yam import YAMRobot
 # Global variables for cleanup
 active_threads = []
 active_servers = []
+active_executors = []
+active_agents = []
 cleanup_in_progress = False
+
+
+def dump_alive_threads(context: str) -> None:
+    current_thread = threading.current_thread()
+    frames = sys._current_frames()
+    alive_threads = [
+        thread
+        for thread in threading.enumerate()
+        if thread is not current_thread and thread.is_alive()
+    ]
+    if not alive_threads:
+        return
+
+    print(f"[shutdown] alive threads after {context}:")
+    for thread in alive_threads:
+        print(
+            f"[shutdown] thread name={thread.name!r} "
+            f"daemon={thread.daemon} ident={thread.ident}"
+        )
+        frame = frames.get(thread.ident)
+        if frame is not None:
+            stack = "".join(traceback.format_stack(frame))
+            print(stack.rstrip())
 
 
 def cleanup():
     """Clean up resources before exit."""
     global cleanup_in_progress
     if cleanup_in_progress:
-        print("Cleanup already in progress, skipping...")
         return
     cleanup_in_progress = True
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+
+    if not (active_servers or active_threads or active_agents or active_executors):
+        return
 
     print("Cleaning up resources...")
-
-    # First, stop all servers to signal threads to exit
-    print(f"Stopping {len(active_servers)} servers...")
-    for i, server in enumerate(active_servers):
+    for server in active_servers:
         try:
-            print(f"  Stopping server {i}: {type(server).__name__}")
-            if hasattr(server, "stop"):
-                print(f"    Calling stop()...")
-                server.stop()
-                print(f"    stop() completed")
-            elif hasattr(server, "close"):
-                print(f"    Calling close()...")
+            if hasattr(server, "close"):
                 server.close()
-                print(f"    close() completed")
         except Exception as e:
-            print(f"Error stopping server {i}: {e}")
+            print(f"Error closing server: {e}")
 
-    # Then wait for threads to finish
-    print(f"Joining {len(active_threads)} threads...")
-    for i, thread in enumerate(active_threads):
+    for thread in active_threads:
         if thread.is_alive():
-            print(f"  Joining thread {i}...")
             thread.join(timeout=2)
-            if thread.is_alive():
-                print(f"  Thread {i} still alive after timeout!")
-            else:
-                print(f"  Thread {i} joined successfully")
+        if thread.is_alive():
+            print(f"Warning: thread {thread.name} did not stop cleanly")
 
+    for agent in active_agents:
+        try:
+            if hasattr(agent, "close"):
+                agent.close()
+        except Exception as e:
+            print(f"Error closing agent: {e}")
+
+    for executor in active_executors:
+        executor.shutdown(wait=True, cancel_futures=True)
+
+    dump_alive_threads("cleanup")
     print("Cleanup completed.")
 
 
@@ -85,34 +113,47 @@ def wait_for_server_ready(port, host="127.0.0.1", timeout_seconds=5):
     return False
 
 
-def get_follower_joint_positions(robot):
+def _read_yam_joint_positions(robot):
+    if isinstance(robot, YAMRobot):
+        return np.array(robot.robot.get_joint_pos())
+    return None
+
+
+def get_follower_joint_positions(robot, executor=None):
     """Get follower joint positions from YAM robot.
     
     Args:
         robot: Robot object (could be YAMRobot or wrapped in BimanualRobot)
         
     Returns:
-        tuple: (joint_positions, timestamp) where joint_positions is np.ndarray or None, 
-               timestamp is int (nanoseconds from perf_counter), or None if not available
+        tuple: (joint_positions, timestamp) where timestamp is float seconds from
+               time.perf_counter() captured after the follower reads complete.
     """
     import time
-    timestamp = time.perf_counter()
     
     if hasattr(robot, '_robot_l') and hasattr(robot, '_robot_r'):
         left_robot = robot._robot_l
         right_robot = robot._robot_r
-        
-        left_joints = None
-        right_joints = None
-        
-        if isinstance(left_robot, YAMRobot):
-            i2rt_robot_l = left_robot.robot
-            left_joints = np.array(i2rt_robot_l.get_joint_pos())
-        
-        if isinstance(right_robot, YAMRobot):
-            i2rt_robot_r = right_robot.robot
-            right_joints = np.array(i2rt_robot_r.get_joint_pos())
-        
+
+        if executor is None:
+            with ThreadPoolExecutor(
+                max_workers=2, thread_name_prefix="follower_joint_reader"
+            ) as local_executor:
+                left_future = local_executor.submit(
+                    _read_yam_joint_positions, left_robot
+                )
+                right_future = local_executor.submit(
+                    _read_yam_joint_positions, right_robot
+                )
+                left_joints = left_future.result()
+                right_joints = right_future.result()
+        else:
+            left_future = executor.submit(_read_yam_joint_positions, left_robot)
+            right_future = executor.submit(_read_yam_joint_positions, right_robot)
+            left_joints = left_future.result()
+            right_joints = right_future.result()
+
+        timestamp = time.perf_counter()
         if left_joints is not None and right_joints is not None:
             joints = np.concatenate((left_joints, right_joints))
             return joints, timestamp
@@ -122,9 +163,13 @@ def get_follower_joint_positions(robot):
             return right_joints, timestamp
         else:
             return None, timestamp
-    
-    # No robot or not bimanual - return None with timestamp
-    return None, timestamp
+
+    if isinstance(robot, YAMRobot):
+        joints = _read_yam_joint_positions(robot)
+        return joints, time.perf_counter()
+
+    # No YAM robot - return None with timestamp
+    return None, time.perf_counter()
 
 
 @dataclass
@@ -149,7 +194,10 @@ def signal_handler(signum, frame):
 
 
 def main():
-    # Register signal handlers for graceful shutdown
+    # Register cleanup handlers
+    # If terminated without cleanup, can leave ZMQ sockets bound causing "address in use" errors or resource leaks
+
+    atexit.register(cleanup)
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
@@ -177,6 +225,7 @@ def main():
     else:
         agent = instantiate_from_dict(left_cfg["agent"])
         # agent = None
+    active_agents.append(agent)
 
     # Create robot(s)
     left_robot_cfg = left_cfg["robot"]
@@ -197,7 +246,16 @@ def main():
             )
 
         right_robot = instantiate_from_dict(right_robot_cfg)
-        robot = BimanualRobot(left_robot, right_robot)
+        parallel_commands = isinstance(left_robot, YAMRobot) and isinstance(
+            right_robot, YAMRobot
+        )
+        robot = BimanualRobot(
+            left_robot,
+            right_robot,
+            parallel_commands=parallel_commands,
+        )
+        if parallel_commands:
+            print("Bimanual YAM command dispatch: parallel")
 
         # For bimanual, use the left config for general settings (hz, etc.)
         cfg = left_cfg
@@ -215,8 +273,13 @@ def main():
         server_port = cfg["robot"].get("port", 5556)
         server_host = cfg["robot"].get("host", "127.0.0.1")
 
-        # Start server in background
-        server_thread = threading.Thread(target=robot.serve, daemon=True)
+        # Keep this non-daemon so cleanup exposes shutdown regressions instead
+        # of silently abandoning the server thread.
+        server_thread = threading.Thread(
+            target=robot.serve,
+            name="gello_robot_server",
+            daemon=False,
+        )
         server_thread.start()
 
         # Track for cleanup
@@ -230,7 +293,6 @@ def main():
 
         # Create client to communicate with server using port and host from config
         robot_client = ZMQClientRobot(port=server_port, host=server_host)
-        active_servers.append(robot_client)  # Track client for cleanup
     else:  # Direct robot (hardware)
         from gello.env import RobotEnv
         from gello.zmq_core.robot_node import ZMQClientRobot, ZMQServerRobot
@@ -241,7 +303,11 @@ def main():
 
         # Create ZMQ server for the hardware robot
         server = ZMQServerRobot(robot, port=hardware_port, host=hardware_host)
-        server_thread = threading.Thread(target=server.serve, daemon=True)
+        server_thread = threading.Thread(
+            target=server.serve,
+            name="gello_hardware_server",
+            daemon=False,
+        )
         server_thread.start()
 
         # Track for cleanup
@@ -257,7 +323,6 @@ def main():
 
         # Create client to communicate with hardware
         robot_client = ZMQClientRobot(port=hardware_port, host=hardware_host)
-        active_servers.append(robot_client)  # Track client for cleanup
 
     env = RobotEnv(robot_client, control_rate_hz=cfg.get("hz", 30))
 
@@ -288,13 +353,25 @@ def main():
             expand_user=True,
         )
 
+    follower_reader = None
+    if save_interface is not None:
+        follower_executor = None
+        if bimanual:
+            follower_executor = ThreadPoolExecutor(
+                max_workers=2, thread_name_prefix="follower_joint_reader"
+            )
+            active_executors.append(follower_executor)
+        follower_reader = lambda: get_follower_joint_positions(
+            robot, executor=follower_executor
+        )
+
     # Run main control loop
     try:
         run_control_loop(
-            env, 
-            agent, 
-            save_interface, 
-            get_follower_joints_fn=lambda: get_follower_joint_positions(robot)
+            env,
+            agent,
+            save_interface,
+            get_follower_joints_fn=follower_reader,
         )
     except KeyboardInterrupt:
         print("\nControl loop interrupted by user")
@@ -305,28 +382,6 @@ def main():
     finally:
         # Ensure cleanup runs even on normal exit or exceptions
         cleanup()
-
-        # Also close the underlying robot(s) to stop their internal threads
-        print("Closing robot(s)...")
-        try:
-            if hasattr(robot, '_robot_l') and hasattr(robot, '_robot_r'):
-                # Bimanual robot - close both
-                if hasattr(robot._robot_l, 'robot') and hasattr(robot._robot_l.robot, 'close'):
-                    print("  Closing left robot...")
-                    robot._robot_l.robot.close()
-                if hasattr(robot._robot_r, 'robot') and hasattr(robot._robot_r.robot, 'close'):
-                    print("  Closing right robot...")
-                    robot._robot_r.robot.close()
-            elif hasattr(robot, 'robot') and hasattr(robot.robot, 'close'):
-                # Single robot
-                robot.robot.close()
-
-            # Give threads time to finish
-            print("  Waiting for robot threads to finish...")
-            time.sleep(0.5)
-        except Exception as e:
-            print(f"Error closing robot: {e}")
-
         print("Exiting...")
 
 

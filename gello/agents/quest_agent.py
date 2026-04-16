@@ -6,7 +6,7 @@ from dm_control import mjcf
 from dm_control.utils.inverse_kinematics import qpos_from_site_pose
 from oculus_reader.reader import OculusReader
 
-from gello.agents.agent import Agent
+from gello.agents.agent import Action, Agent
 from gello.agents.spacemouse_agent import apply_transfer, mj2ur, ur2mj
 from gello.dm_control_tasks.arms.ur5e import UR5e
 
@@ -42,7 +42,7 @@ class SingleArmQuestAgent(Agent):
         self.robot_type = robot_type
         self._verbose = verbose
 
-    def act(self, obs: Dict[str, np.ndarray]) -> np.ndarray:
+    def act(self, obs: Dict[str, np.ndarray]) -> Action:
         if self.robot_type == "ur5":
             num_dof = 6
         current_qpos = obs["joint_positions"][:num_dof]  # last one dim is the gripper
@@ -75,14 +75,16 @@ class SingleArmQuestAgent(Agent):
         pose_data, button_data = self.oculus_reader.get_transformations_and_buttons()
         if len(pose_data) == 0 or len(button_data) == 0:
             print("no data, quest not yet ready")
-            return np.concatenate([current_qpos, [current_gripper_angle]])
+            return {"pos": np.concatenate([current_qpos, [current_gripper_angle]])}
 
         new_gripper_angle = current_gripper_angle
         if button_data[gripper_open_key]:
             new_gripper_angle = 1
         if button_data[gripper_close_key]:
             new_gripper_angle = 0
-        arm_not_move_return = np.concatenate([current_qpos, [new_gripper_angle]])
+        arm_not_move_return = {
+            "pos": np.concatenate([current_qpos, [new_gripper_angle]])
+        }
         if len(pose_data) == 0:
             print("no data, quest not yet ready")
             return arm_not_move_return
@@ -127,7 +129,7 @@ class SingleArmQuestAgent(Agent):
                     print("ik failed, using the original qpos")
                     return arm_not_move_return
                 command = np.concatenate([new_qpos, [new_gripper_angle]])
-                return command
+                return {"pos": command}
 
             else:  # last state is not in active
                 self.control_active = True
@@ -151,7 +153,7 @@ class DualArmQuestAgent(Agent):
         self.left_arm = SingleArmQuestAgent(robot_type, "l")
         self.right_arm = SingleArmQuestAgent(robot_type, "r")
 
-    def act(self, obs: Dict[str, np.ndarray]) -> np.ndarray:
+    def act(self, obs: Dict[str, np.ndarray]) -> Action:
         pass
 
 

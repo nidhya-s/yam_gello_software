@@ -5,6 +5,7 @@ from typing import Any, Dict
 import numpy as np
 import zmq
 
+from gello.agents.agent import Action
 from gello.robots.robot import Robot
 
 DEFAULT_ROBOT_PORT = 6000
@@ -26,6 +27,7 @@ class ZMQServerRobot:
         self._timout_message = f"Timeout in Robot Server, Robot: {robot}"
         self._socket.bind(addr)
         self._stop_event = threading.Event()
+        self._closed = False
 
     def serve(self) -> None:
         """Serve the leader robot state over ZMQ."""
@@ -59,10 +61,25 @@ class ZMQServerRobot:
             except zmq.Again:
                 # Timeout occurred - don't spam the console
                 pass
+            except (zmq.error.ContextTerminated, zmq.error.ZMQError):
+                if not self._stop_event.is_set():
+                    raise
+                break
 
     def stop(self) -> None:
         """Signal the server to stop serving."""
         self._stop_event.set()
+
+    def close(self) -> None:
+        """Close the server socket and context."""
+        if self._closed:
+            return
+        self._stop_event.set()
+        self._socket.close(linger=0)
+        self._context.term()
+        if hasattr(self._robot, "close"):
+            self._robot.close()
+        self._closed = True
 
 
 class ZMQClientRobot(Robot):
@@ -102,15 +119,15 @@ class ZMQClientRobot(Robot):
         except zmq.Again:
             raise RuntimeError("ZMQ timeout - robot may be disconnected")
 
-    def command_joint_state(self, joint_state: np.ndarray) -> None:
+    def command_joint_state(self, action: Action) -> None:
         """Command the leader robot to the given state.
 
         Args:
-            joint_state (T): The state to command the leader robot to.
+            action: Action dict containing at least {"pos": ndarray}.
         """
         request = {
             "method": "command_joint_state",
-            "args": {"joint_state": joint_state},
+            "args": {"action": action},
         }
         send_message = pickle.dumps(request)
         self._socket.send(send_message)

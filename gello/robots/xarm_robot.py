@@ -6,6 +6,7 @@ from typing import Dict, Optional
 import numpy as np
 from pyquaternion import Quaternion
 
+from gello.agents.agent import Action, action_pos
 from gello.robots.robot import Robot
 
 
@@ -131,7 +132,8 @@ class XArmRobot(Robot):
         all_dofs = np.concatenate([state.joints(), np.array([gripper])])
         return all_dofs
 
-    def command_joint_state(self, joint_state: np.ndarray) -> None:
+    def command_joint_state(self, action: Action) -> None:
+        joint_state = action_pos(action)
         if len(joint_state) == 7:
             self.set_command(joint_state, None)
         elif len(joint_state) == 8:

@@ -1,16 +1,19 @@
 """Shared utilities for robot control loops."""
 
-from datetime import datetime
+import copy
+import queue
+import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Tuple
 
 import numpy as np
 
-from gello.agents.agent import Agent
+from gello.agents.agent import Action, Agent, action_pos
 from gello.env import RobotEnv
 
 DEFAULT_MAX_JOINT_DELTA = 1.0
+FollowerJointsFn = Callable[[], Optional[Tuple[Optional[np.ndarray], float]]]
 
 
 def move_to_start_position(
@@ -28,7 +31,7 @@ def move_to_start_position(
         bool: True if successful, False if position too far
     """
     print("Going to start position")
-    start_pos = agent.act(env.get_obs())
+    start_pos = action_pos(agent.act(env.get_obs()))
     obs = env.get_obs()
     joints = obs["joint_positions"]
 
@@ -58,13 +61,13 @@ def move_to_start_position(
 
     for _ in range(steps):
         obs = env.get_obs()
-        command_joints = agent.act(obs)
+        command_joints = action_pos(agent.act(obs))
         current_joints = obs["joint_positions"]
         delta = command_joints - current_joints
         max_joint_delta = np.abs(delta).max()
         if max_joint_delta > max_delta:
             delta = delta / max_joint_delta * max_delta
-        env.step(current_joints + delta)
+        env.step({"pos": current_joints + delta})
 
     return True
 
@@ -92,13 +95,18 @@ class SaveInterface:
         # self.save_path.mkdir(parents=True, exist_ok=True)
         print(f"Automatic save mode enabled. Saving to {self.save_path} every step.")
 
-    def update(self, obs: Dict[str, Any], action: np.ndarray, control_data_timestamp: Optional[int] = None) -> Optional[str]:
+    def update(
+        self,
+        obs: Dict[str, Any],
+        action: Action,
+        control_data_timestamp: Optional[float] = None,
+    ) -> Optional[str]:
         """Update save interface and handle saving.
 
         Args:
             obs: Current observations
             action: Current action
-            control_data_timestamp: Timestamp (nanoseconds) when control data was gathered
+            control_data_timestamp: perf_counter() timestamp when control data was gathered
 
         Returns:
             Optional[str]: "quit" if user wants to exit, None otherwise
@@ -118,24 +126,124 @@ class SaveInterface:
         return None
 
 
+def _copy_record_value(value: Any) -> Any:
+    if isinstance(value, np.ndarray):
+        return value.copy()
+    if isinstance(value, dict):
+        return {k: _copy_record_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(_copy_record_value(v) for v in value)
+    return copy.deepcopy(value)
+
+
+def _minimal_record_obs(obs: Dict[str, Any]) -> Dict[str, Any]:
+    """Copy only observation fields that save_frame persists."""
+    keep = ("joint_positions",)
+    return {k: _copy_record_value(obs[k]) for k in keep if k in obs}
+
+
+class AsyncRecordingWorker:
+    """Background follower-read and disk-save worker for recording runs."""
+
+    def __init__(
+        self,
+        save_interface: SaveInterface,
+        get_follower_joints_fn: Optional[FollowerJointsFn] = None,
+        max_queue_size: int = 512,
+    ):
+        self._save_interface = save_interface
+        self._get_follower_joints_fn = get_follower_joints_fn
+        self._queue: queue.Queue[Optional[Dict[str, Any]]] = queue.Queue(
+            maxsize=max_queue_size
+        )
+        self._dropped = 0
+        self._saved = 0
+        self._error: Optional[BaseException] = None
+        self._thread = threading.Thread(
+            target=self._run, name="gello_async_recorder", daemon=True
+        )
+        self._thread.start()
+
+    def submit(
+        self,
+        obs: Dict[str, Any],
+        action: Action,
+        control_data_timestamp: float,
+    ) -> None:
+        if self._error is not None:
+            raise RuntimeError("Async recording worker failed") from self._error
+
+        record = {
+            "obs": _minimal_record_obs(obs),
+            "action": _copy_record_value(action),
+            "control_data_timestamp": float(control_data_timestamp),
+        }
+        try:
+            self._queue.put_nowait(record)
+        except queue.Full:
+            self._dropped += 1
+
+    def close(self) -> None:
+        try:
+            self._queue.put(None, timeout=1.0)
+        except queue.Full:
+            print("[recording] warning: async recorder queue full during shutdown")
+        self._thread.join(timeout=5.0)
+        if self._thread.is_alive():
+            print("[recording] warning: async recorder did not stop within timeout")
+        if self._dropped:
+            print(f"[recording] warning: dropped {self._dropped} frames")
+        if self._saved:
+            print(f"[recording] async recorder saved {self._saved} frames")
+        if self._error is not None:
+            raise RuntimeError("Async recording worker failed") from self._error
+
+    def _run(self) -> None:
+        while True:
+            record = self._queue.get()
+            try:
+                if record is None:
+                    return
+                self._write_record(record)
+                self._saved += 1
+            except BaseException as exc:
+                self._error = exc
+                return
+            finally:
+                self._queue.task_done()
+
+    def _write_record(self, record: Dict[str, Any]) -> None:
+        obs = record["obs"]
+        action = record["action"]
+        control_data_timestamp = record["control_data_timestamp"]
+
+        if self._get_follower_joints_fn is not None:
+            result = self._get_follower_joints_fn()
+            if result is not None:
+                follower_joints, follower_timestamp = result
+                if follower_joints is not None:
+                    obs["follower_joint_positions"] = _copy_record_value(
+                        follower_joints
+                    )
+                    obs["follower_joint_timestamp"] = follower_timestamp
+
+        result = self._save_interface.update(obs, action, control_data_timestamp)
+        if result == "quit":
+            raise KeyboardInterrupt("async recorder requested quit")
+
+
 def run_control_loop(
     env: RobotEnv,
     agent: Agent,
     save_interface: Optional[SaveInterface] = None,
     print_timing: bool = True,
     use_colors: bool = False,
-    get_follower_joints_fn: Optional[Callable[[], Optional[np.ndarray]]] = None,
+    get_follower_joints_fn: Optional[FollowerJointsFn] = None,
 ) -> None:
-    """Run the main control loop with exponential smoothing.
+    """Run the main control loop.
 
-    Args:
-        env: Robot environment
-        agent: Agent for control
-        save_interface: Optional save interface for data collection
-        print_timing: Whether to print timing information
-        use_colors: Whether to use colored terminal output
-        get_follower_joints_fn: Optional function to get follower joint positions
-        smoothing_alpha: Exponential smoothing factor (0.0=no smoothing, 0.9=very smooth)
+    Recording is intentionally off the command path: command the robot first,
+    then enqueue the save/follower read work for the background recorder.
     """
     # Check if we can use colors
     colors_available = False
@@ -154,37 +262,39 @@ def run_control_loop(
 
     start_time = time.time()
     obs = env.get_obs()
+    async_recorder = (
+        AsyncRecordingWorker(save_interface, get_follower_joints_fn)
+        if save_interface is not None
+        else None
+    )
 
-    while True:
-        if print_timing:
-            num = time.time() - start_time
-            message = f"\rTime passed: {round(num, 2)}          "
+    try:
+        while True:
+            if print_timing:
+                num = time.time() - start_time
+                message = f"\rTime passed: {round(num, 2)}          "
 
-            if colors_available:
-                print(
-                    colored(message, color="white", attrs=["bold"]), end="", flush=True
-                )
-            else:
-                print(message, end="", flush=True)
+                if colors_available:
+                    print(
+                        colored(message, color="white", attrs=["bold"]),
+                        end="",
+                        flush=True,
+                    )
+                else:
+                    print(message, end="", flush=True)
 
-        # Track timestamp when control action is being retrieved
-        control_data_timestamp = time.perf_counter()
-        action = agent.act(obs)
-        
-        # Get follower joint positions and add to observation for saving
-        if get_follower_joints_fn is not None:
-            result = get_follower_joints_fn()
-            if result is not None:
-                follower_joints, follower_timestamp = result
-                if follower_joints is not None:
-                    obs["follower_joint_positions"] = follower_joints
-                    # print(f"Follower joints: {follower_joints}")
-                    obs["follower_joint_timestamp"] = follower_timestamp
+            action = agent.act(obs)
+            control_data_timestamp = float(
+                action.get("timestamp", time.perf_counter())
+            )
 
-        # Handle save interface
-        if save_interface is not None:
-            result = save_interface.update(obs, action, control_data_timestamp)
-            if result == "quit":
-                break
-        
-        obs = env.step(action)
+            if async_recorder is not None:
+                step_start = env.begin_step(action)
+                async_recorder.submit(obs, action, control_data_timestamp)
+                obs = env.finish_step(step_start)
+                continue
+
+            obs = env.step(action)
+    finally:
+        if async_recorder is not None:
+            async_recorder.close()

@@ -7,7 +7,7 @@ import numpy as np
 from dm_control import mjcf
 from dm_control.utils.inverse_kinematics import qpos_from_site_pose
 
-from gello.agents.agent import Agent
+from gello.agents.agent import Action, Agent
 from gello.dm_control_tasks.arms.ur5e import UR5e
 
 # mujoco has a slightly different coordinate system than UR control box
@@ -86,7 +86,7 @@ class SpacemouseAgent(Agent):
         else:
             raise ValueError("Failed to open spacemouse")
 
-    def act(self, obs: Dict[str, np.ndarray]) -> np.ndarray:
+    def act(self, obs: Dict[str, np.ndarray]) -> Action:
         import quaternion
 
         # obs: the folllow robot's current state
@@ -201,7 +201,7 @@ class SpacemouseAgent(Agent):
             new_qpos = ik_result.qpos[:num_dof]
         else:
             print("ik failed, using the original qpos")
-            return np.concatenate([current_qpos, [current_gripper_angle]])
+            return {"pos": np.concatenate([current_qpos, [current_gripper_angle]])}
         new_gripper_angle = current_gripper_angle
         if self._invert_button:
             if spacemouse_button[1]:
@@ -214,7 +214,7 @@ class SpacemouseAgent(Agent):
             if spacemouse_button[0]:
                 new_gripper_angle = 1
         command = np.concatenate([new_qpos, [new_gripper_angle]])
-        return command
+        return {"pos": command}
 
 
 if __name__ == "__main__":
