@@ -14,11 +14,13 @@ class YAMRobot(Robot):
         self,
         channel="can0",
         velocity_feedforward_eta: float = 0.9,
-        velocity_feedforward_max_vel: float = 6.0,
+        gripper_type: str = "linear_4310",
     ):
         from i2rt.robots.get_robot import get_yam_robot
+        from i2rt.robots.utils import GripperType
 
-        self.robot = get_yam_robot(channel=channel)
+        self._gripper_type = GripperType.from_string_name(gripper_type)
+        self.robot = get_yam_robot(channel=channel, gripper_type=self._gripper_type)
 
         self._joint_names = [
             "joint1",
@@ -35,9 +37,7 @@ class YAMRobot(Robot):
 
         self._channel = channel
         self._ff_eta = float(velocity_feedforward_eta)
-        self._ff_max_vel = float(velocity_feedforward_max_vel)
         self._ff_frame_count = 0
-        self._ff_clip_count = 0
         self._ff_max_abs_seen = 0.0
         self._closed = False
         atexit.register(self._print_ff_summary)
@@ -77,11 +77,7 @@ class YAMRobot(Robot):
         if vel_ff.size > 0:
             vel_ff[-1] = 0.0
 
-        n_clipped = int(np.count_nonzero(np.abs(vel_ff) > self._ff_max_vel))
-        if n_clipped > 0:
-            vel_ff = np.clip(vel_ff, -self._ff_max_vel, self._ff_max_vel)
         self._ff_frame_count += 1
-        self._ff_clip_count += n_clipped
         max_this_frame = float(np.max(np.abs(vel_ff))) if vel_ff.size else 0.0
         if max_this_frame > self._ff_max_abs_seen:
             self._ff_max_abs_seen = max_this_frame
@@ -103,16 +99,10 @@ class YAMRobot(Robot):
         """Printed at interpreter shutdown via atexit. No hardware calls."""
         if self._ff_frame_count == 0:
             return
-        ff_enabled_joints = max(self.num_dofs() - 1, 1)
-        total_elems = self._ff_frame_count * ff_enabled_joints
-        clip_rate = self._ff_clip_count / total_elems if total_elems > 0 else 0.0
         print(
             f"[YAMRobot {self._channel}] velocity FF summary: "
-            f"eta={self._ff_eta:.3f}  max_vel={self._ff_max_vel:.2f} rad/s  "
+            f"eta={self._ff_eta:.3f}  "
             f"frames={self._ff_frame_count}  "
-            f"clipped_elements={self._ff_clip_count}/{total_elems} "
-            f"(over {ff_enabled_joints} FF-enabled joints, "
-            f"{clip_rate * 100:.3f}%)  "
             f"max_abs_vel_sent={self._ff_max_abs_seen:.3f} rad/s"
         )
 

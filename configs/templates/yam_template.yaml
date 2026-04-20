@@ -1,12 +1,14 @@
 robot:
   _target_: gello.robots.yam.YAMRobot
   channel: "can_left"
+  gripper_type: "linear_4310"
 
 agent:
   _target_: gello.agents.gello_agent.GelloAgent
   port: "/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTA2U4GA-if00-port0"
   dynamixel_config:
     _target_: gello.agents.gello_agent.DynamixelRobotConfig
+    baudrate: 1000000
     joint_ids: [1, 2, 3, 4, 5, 6]
     joint_offsets: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
     joint_signs: [1, -1, -1, -1, 1, 1]

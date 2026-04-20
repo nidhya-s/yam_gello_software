@@ -92,6 +92,7 @@ class ZMQRobotServer:
         addr = f"tcp://{host}:{port}"
         self._socket.bind(addr)
         self._stop_event = threading.Event()
+        self._closed = False
 
     def serve(self) -> None:
         """Serve the robot state and commands over ZMQ."""
@@ -122,12 +123,24 @@ class ZMQRobotServer:
 
                 self._socket.send(pickle.dumps(result))
             except zmq.error.Again:
-                print("Timeout in ZMQLeaderServer serve")
-                # Timeout occurred, check if the stop event is set
+                # Timeout: loop and re-check stop event.
+                pass
+            except (zmq.error.ContextTerminated, zmq.error.ZMQError):
+                if not self._stop_event.is_set():
+                    raise
+                break
 
     def stop(self) -> None:
+        """Signal the server to stop serving."""
         self._stop_event.set()
-        self._socket.close()
+
+    def close(self) -> None:
+        """Stop the server and release ZMQ resources. Idempotent."""
+        if self._closed:
+            return
+        self._closed = True
+        self._stop_event.set()
+        self._socket.close(linger=0)
         self._context.term()
 
 
@@ -166,6 +179,8 @@ class MujocoRobotServer:
         self._zmq_server_thread = ZMQServerThread(self._zmq_server)
 
         self._print_joints = print_joints
+        self._stop_event = threading.Event()
+        self._closed = False
 
     def num_dofs(self) -> int:
         return self._num_joints
@@ -221,7 +236,7 @@ class MujocoRobotServer:
         # start the zmq server
         self._zmq_server_thread.start()
         with mujoco.viewer.launch_passive(self._model, self._data) as viewer:
-            while viewer.is_running():
+            while viewer.is_running() and not self._stop_event.is_set():
                 step_start = time.time()
 
                 # mj_step can be replaced with code that also evaluates
@@ -252,7 +267,22 @@ class MujocoRobotServer:
                     time.sleep(time_until_next_step)
 
     def stop(self) -> None:
-        self._zmq_server_thread.join()
+        """Signal the sim loop and ZMQ server to stop."""
+        self._stop_event.set()
+        self._zmq_server.stop()
+
+    def close(self) -> None:
+        """Signal stop, close ZMQ server, and join its thread. Idempotent."""
+        if self._closed:
+            return
+        self._closed = True
+        self._stop_event.set()
+        self._zmq_server.close()
+        if self._zmq_server_thread.is_alive():
+            self._zmq_server_thread.join(timeout=2.0)
 
     def __del__(self) -> None:
-        self.stop()
+        try:
+            self.close()
+        except Exception:
+            pass

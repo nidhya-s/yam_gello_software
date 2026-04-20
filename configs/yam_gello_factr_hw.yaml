@@ -62,6 +62,7 @@ teleop:
   robot:
     _target_: gello.robots.yam.YAMRobot
     channel: can_right
+    gripper_type: "linear_4310"
   mapping:
     # Map leader joints to follower joints
     index_map: [0, 1, 2, 3, 4, 5]

@@ -13,6 +13,7 @@ class Args:
     robot_port: int = 6001
     hostname: str = "127.0.0.1"
     robot_ip: str = "192.168.1.10"
+    gripper_type: str = "linear_4310"  # i2rt gripper type for YAM robots (linear_4310, crank_4310, linear_3507, flexible_4310, yam_teaching_handle, no_gripper)
 
 
 def launch_robot_server(args: Args):
@@ -88,7 +89,7 @@ def launch_robot_server(args: Args):
         elif args.robot == "yam":
             from gello.robots.yam import YAMRobot
 
-            robot = YAMRobot(channel="can0")
+            robot = YAMRobot(channel="can0", gripper_type=args.gripper_type)
         elif args.robot == "none" or args.robot == "print":
             robot = PrintRobot(8)
 
