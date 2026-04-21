@@ -4,6 +4,7 @@ import copy
 import queue
 import threading
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
@@ -268,11 +269,40 @@ def run_control_loop(
         else None
     )
 
+    iter_durations: deque[float] = deque(maxlen=60)
+    act_durations: deque[float] = deque(maxlen=60)
+    cmd_durations: deque[float] = deque(maxlen=60)
+    obs_durations: deque[float] = deque(maxlen=60)
+    prev_iter_start: Optional[float] = None
+
+    def _pct(values: deque[float], pct: float) -> float:
+        if not values:
+            return 0.0
+        ordered = sorted(values)
+        idx = min(len(ordered) - 1, int(round(pct * (len(ordered) - 1))))
+        return ordered[idx] * 1000.0
+
     try:
         while True:
+            iter_start = time.perf_counter()
+            if prev_iter_start is not None:
+                iter_durations.append(iter_start - prev_iter_start)
+            prev_iter_start = iter_start
+
             if print_timing:
                 num = time.time() - start_time
-                message = f"\rTime passed: {round(num, 2)}          "
+                if iter_durations:
+                    mean_dt = sum(iter_durations) / len(iter_durations)
+                    hz = 1.0 / mean_dt if mean_dt > 0 else 0.0
+                    latency_ms = mean_dt * 1000.0
+                    message = (
+                        f"\rt={num:6.2f}s Hz={hz:5.1f} loop={latency_ms:5.2f}ms "
+                        f"act(p50/p99)={_pct(act_durations,0.5):5.2f}/{_pct(act_durations,0.99):5.2f}ms "
+                        f"cmd(p50/p99)={_pct(cmd_durations,0.5):5.2f}/{_pct(cmd_durations,0.99):5.2f}ms "
+                        f"obs(p50/p99)={_pct(obs_durations,0.5):5.2f}/{_pct(obs_durations,0.99):5.2f}ms   "
+                    )
+                else:
+                    message = f"\rTime passed: {round(num, 2)}          "
 
                 if colors_available:
                     print(
@@ -283,18 +313,30 @@ def run_control_loop(
                 else:
                     print(message, end="", flush=True)
 
+            t0 = time.perf_counter()
             action = agent.act(obs)
+            t_act = time.perf_counter()
+            act_durations.append(t_act - t0)
             control_data_timestamp = float(
                 action.get("timestamp", time.perf_counter())
             )
 
             if async_recorder is not None:
                 step_start = env.begin_step(action)
+                t_cmd = time.perf_counter()
+                cmd_durations.append(t_cmd - t_act)
                 async_recorder.submit(obs, action, control_data_timestamp)
                 obs = env.finish_step(step_start)
+                t_obs = time.perf_counter()
+                obs_durations.append(t_obs - t_cmd)
                 continue
 
-            obs = env.step(action)
+            step_start = env.begin_step(action)
+            t_cmd = time.perf_counter()
+            cmd_durations.append(t_cmd - t_act)
+            obs = env.finish_step(step_start)
+            t_obs = time.perf_counter()
+            obs_durations.append(t_obs - t_cmd)
     finally:
         if async_recorder is not None:
             async_recorder.close()

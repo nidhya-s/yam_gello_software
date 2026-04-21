@@ -199,7 +199,17 @@ class MujocoRobotServer:
             _joint_state[-1] = _joint_state[-1] * 255
             self._joint_cmd = _joint_state
         else:
-            self._joint_cmd = joint_state.copy()
+            # The leader (DynamixelRobot) normalizes the gripper command to
+            # [0, 1]. Real YAM hardware uses this convention directly (i2rt
+            # maps [0,1] to the physical gripper range internally), but
+            # MuJoCo's position actuator expects ctrl in its declared
+            # ctrlrange (e.g. [0, 0.041] m of finger travel). Scale the last
+            # element by the gripper actuator's ctrlrange max so sim matches
+            # real semantics.
+            _joint_state = joint_state.copy()
+            gripper_ctrl_max = float(self._model.actuator_ctrlrange[-1, 1])
+            _joint_state[-1] = _joint_state[-1] * gripper_ctrl_max
+            self._joint_cmd = _joint_state
 
     def freedrive_enabled(self) -> bool:
         return True

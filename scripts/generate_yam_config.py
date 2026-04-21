@@ -34,7 +34,7 @@ class Args:
     start_joints: Tuple[float, ...] = (0, 0, 0, 0, 0, 0)
     """The joint angles that the GELLO should be placed in (in radians). Default is YAM known position."""
 
-    joint_signs: Tuple[float, ...] = (1, -1, -1, -1, 1, 1)
+    joint_signs: Tuple[float, ...] = (1, 1, 1, 1, 1, 1)
     """The joint signs for YAM arm."""
 
     gripper: bool = True
@@ -89,7 +89,7 @@ def get_joint_offsets(
 ) -> Tuple[list, Optional[Tuple[float, float]]]:
     """Get joint offsets using the same logic as gello_get_offset.py."""
     joint_ids = list(range(1, args.num_joints + 1))
-    driver = DynamixelDriver(joint_ids, port=port, baudrate=1000000)
+    driver = DynamixelDriver(joint_ids, port=port, baudrate=3000000)
 
     def get_error(offset: float, index: int, joint_state: np.ndarray) -> float:
         joint_sign_i = args.joint_signs[index]
@@ -103,11 +103,13 @@ def get_joint_offsets(
 
     best_offsets = []
     curr_joints = driver.get_joints()
+    print(f"   Raw Dynamixel readings (rad): {[f'{x:.4f}' for x in curr_joints[:args.num_robot_joints]]}")
 
     for i in range(args.num_robot_joints):
         best_offset = 0
         best_error = 1e6
-        for offset in np.linspace(-8 * np.pi, 8 * np.pi, 8 * 4 + 1):
+        num_offset_candidates = 8 * 16 + 1 if i == 0 else 8 * 4 + 1
+        for offset in np.linspace(-8 * np.pi, 8 * np.pi, num_offset_candidates):
             error = get_error(offset, i, curr_joints)
             if error < best_error:
                 best_error = error
@@ -118,7 +120,9 @@ def get_joint_offsets(
     if args.gripper:
         gripper_current = np.rad2deg(driver.get_joints()[-1])
         gripper_open = gripper_current
-        gripper_close = gripper_current - 59.5
+        # Nominal trigger sweep is ~59.5°, but we shrink by 2° so that a
+        # slightly-short full-close trigger still normalizes to g_pos=1.0.
+        gripper_close = gripper_current - 57.5
         gripper_config = (gripper_open, gripper_close)
 
     return best_offsets, gripper_config
@@ -135,6 +139,7 @@ def flow_style_representer(dumper, data):
 def update_config_with_offsets(
     template_config: dict,
     port: str,
+    channel: str,
     joint_offsets: list,
     gripper_config: Optional[Tuple[float, float]],
 ) -> dict:
@@ -163,13 +168,20 @@ def update_config_with_offsets(
 
     # Update basic config
     config["agent"]["port"] = port
+    if "channel" in config.get("robot", {}):
+        config["robot"]["channel"] = channel
 
     # Update offsets and convert to flow style
     dynamixel_config["joint_offsets"] = to_flow_list(
         [round(offset, 5) for offset in joint_offsets]
     )
 
-    # Update gripper config if present
+    # Update gripper config if present.
+    # YAML order is [joint_id, close_deg, open_deg]: servo at close_deg yields
+    # normalized 0.0 (which the YAM follower interprets as closed), and servo
+    # at open_deg yields 1.0 (YAM open). This is the opposite of what the
+    # DynamixelRobotConfig docstring literally says but matches observed
+    # hardware behavior.
     if gripper_config and "gripper_config" in dynamixel_config:
         gripper_vals = [7, gripper_config[1], gripper_config[0]]
         dynamixel_config["gripper_config"] = to_flow_list(
@@ -253,10 +265,10 @@ def main(args: Args) -> None:
 
         # Update configs with detected offsets
         hardware_config = update_config_with_offsets(
-            hardware_template, port, joint_offsets, gripper_config
+            hardware_template, port, args.channel, joint_offsets, gripper_config
         )
         sim_config = update_config_with_offsets(
-            sim_template, port, joint_offsets, gripper_config
+            sim_template, port, args.channel, joint_offsets, gripper_config
         )
 
     except FileNotFoundError as e:

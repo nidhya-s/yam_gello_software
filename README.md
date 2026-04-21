@@ -65,11 +65,20 @@ For the I2RT YAM robot, you can automatically generate your configuration files.
     3.  Change the ID to a unique number (e.g., 1 through 7).
     4.  Repeat for each motor, ensuring they are in order from base to gripper.
 
-2.  **Run the Generation Script**: With the YAM arm in its default build position (see image below), run the script:
+2.  **Run the Generation Script**: With the YAM arm in its default build position (see image below), run the script for each arm you want to configure. Example for the left arm:
     ```bash
-    python scripts/generate_yam_config.py
+    python scripts/generate_yam_config.py \
+        --port=/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FT3M9NVB-if00-port0 \
+        --channel=can_follow_l \
+        --output-path=configs/yam_auto_generated_left.yaml \
+        --sim-output-path=configs/yam_auto_generated_sim_left.yaml
     ```
-    Follow the prompts in the terminal. This will create `configs/yam_auto_generated.yaml` for the real robot and `configs/yam_auto_generated_sim.yaml` for the simulation.
+    Follow the prompts in the terminal. This will write the hardware config to `configs/yam_auto_generated_left.yaml` and the sim config to `configs/yam_auto_generated_sim_left.yaml`.
+
+    Replace the following with the values for your setup:
+    - `--port`: your GELLO FTDI serial device. Find it with `ls /dev/serial/by-id/` (look for `usb-FTDI_USB__-__Serial_Converter_*`).
+    - `--channel`: the CAN interface name you assigned in your udev rules (see the [CAN Configuration](#can-configuration) section below — e.g. `can_left`, `can_right`, or a custom name like `can_follow_l`).
+    - `--output-path` / `--sim-output-path`: per-arm filenames so configs for multiple arms don't overwrite each other (e.g. `_right.yaml` for the right arm).
 
 <p align="center">
   <img src="imgs/yam_default.JPG" width="42%">
@@ -214,16 +223,17 @@ First, install the YAM-specific dependency:
 - **YAM**: [I2RT](https://github.com/i2rt-robotics/i2rt)
 - `uv pip install -e third_party/i2rt`
 
-**Testing in Simulation:**
-Launch the simulation with the auto-generated sim config file:
+Always verify teleop behavior in simulation before switching to real hardware. Use the filenames you chose in the generation step above.
+
+**1. Test in Simulation first:**
 ```bash
-python experiments/launch_yaml.py --left-config-path configs/yam_auto_generated_sim.yaml
+python experiments/launch_yaml.py --left-config-path configs/yam_auto_generated_sim_left.yaml
 ```
 
-**Real Robot Operation:**
-Launch the real robot with the auto-generated hardware config file:
+**2. Real Robot Operation:**
+Only after the sim launch looks correct (arm tracks GELLO pose, gripper opens/closes as expected), launch the real robot:
 ```bash
-python experiments/launch_yaml.py --left-config-path configs/yam_auto_generated.yaml
+python experiments/launch_yaml.py --left-config-path configs/yam_auto_generated_left.yaml
 ```
 
 ### Launching `gello_agent` for non-YAM arms
@@ -288,10 +298,20 @@ python gello/data_utils/demo_to_gdict.py --source-dir=<source_dir>
 
 ### Bimanual Operation
 
-The recommended way to use bimanual mode is with `launch_yaml.py`. Pass a config file for the right arm to `--right-config-path`.
+The recommended way to use bimanual mode is with `launch_yaml.py`. Generate a config for each arm (see [Generate YAML Configuration](#generate-yaml-configuration), running the script once per arm with `--output-path`/`--sim-output-path` pointing to `_left.yaml` / `_right.yaml` filenames), then pass both to the launcher.
 
+**Simulation (verify first):**
+```bash
+python experiments/launch_yaml.py \
+    --left-config-path configs/yam_auto_generated_sim_left.yaml \
+    --right-config-path configs/yam_auto_generated_sim_right.yaml
 ```
-python experiments/launch_yaml.py --left-config-path configs/gello_1.yaml --right-config-path configs/gello_2.yaml
+
+**Real hardware:**
+```bash
+python experiments/launch_yaml.py \
+    --left-config-path configs/yam_auto_generated_left.yaml \
+    --right-config-path configs/yam_auto_generated_right.yaml
 ```
 
 For non-YAM setups, use:

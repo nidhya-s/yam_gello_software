@@ -13,14 +13,15 @@ class YAMRobot(Robot):
     def __init__(
         self,
         channel="can0",
-        velocity_feedforward_eta: float = 0.9,
         gripper_type: str = "linear_4310",
+        velocity_feedforward_eta: float = 0.9,
     ):
         from i2rt.robots.get_robot import get_yam_robot
         from i2rt.robots.utils import GripperType
 
-        self._gripper_type = GripperType.from_string_name(gripper_type)
-        self.robot = get_yam_robot(channel=channel, gripper_type=self._gripper_type)
+        self.robot = get_yam_robot(
+            channel=channel, gripper_type=GripperType(gripper_type)
+        )
 
         self._joint_names = [
             "joint1",

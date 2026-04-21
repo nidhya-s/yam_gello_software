@@ -294,6 +294,14 @@ class DynamixelDriver(DynamixelDriverProtocol):
         if not self._portHandler.openPort():
             raise RuntimeError("Failed to open the port")
 
+        # Force FTDI ASYNC_LOW_LATENCY (latency_timer=1ms) before any servo
+        # I/O. Kernel default of 16ms is the single biggest contributor to
+        # Dynamixel read latency. Must run before the first txRxPacket.
+        self._portHandler.ser.set_low_latency_mode(True)
+        self._portHandler.ser.reset_input_buffer()
+        self._portHandler.ser.reset_output_buffer()
+        time.sleep(0.05)
+
         if not self._portHandler.setBaudRate(self._baudrate):
             raise RuntimeError(f"Failed to change the baudrate, {self._baudrate}")
 

@@ -4,3 +4,6 @@
 [submodule "third_party/mujoco_menagerie"]
 	path = third_party/mujoco_menagerie
 	url = https://github.com/deepmind/mujoco_menagerie.git
+[submodule "third_party/i2rt"]
+	path = third_party/i2rt
+	url = https://github.com/kushtimusPrime/i2rt.git
